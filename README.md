@@ -1,124 +1,116 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Onpango
+Sistema ERP especializado en la gestión inteligente de inventarios en pequeñas y medianas empresas (pymes), con trazabilidad de existencias, predicción de demanda y alertas de reposición.
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> Proyecto de grado — Departamento de Ingeniería de Sistemas y Computación, Universidad del Norte (Barranquilla, Colombia).
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Integrantes
 
-## Description
+- Esteban Dadul
+- Andrés Monserrat
+- Judith Pérez
+- Carlos Arango
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Problema
 
-## Project setup
+Las pymes con inventario físico suelen llevar registros manuales o dispersos, no miden la rotación por ítem y no analizan la demanda que generan sus áreas internas. Pango busca controlar el inventario y anticipar la demanda partiendo de un volumen de datos históricos limitado.
 
-```bash
-$ pnpm install
-```
+## Qué incluye
 
-## Compile and run the project
+- **Inventario:** catálogo de materiales, stock derivado de movimientos (entradas, salidas, ajustes) y trazabilidad.
+- **Solicitudes internas:** registro de consumo por material, área y periodo, que alimenta el histórico de demanda.
+- **Motor de predicción:** pronóstico de demanda, stock de seguridad y punto de reorden (ROP), con el modelo elegido por serie mediante validación temporal.
+- **Alertas:** aviso cuando un material se acerca a su punto de reorden.
+- **Multi-organización (multi-tenant):** una instancia atiende a varias pymes con datos aislados.
 
-```bash
-# development
-$ pnpm run start
+<!-- Fuera del alcance del MVP: RFID (plugin opcional futuro), transporte, permisos operativos, hoja de vida de herramientas y control financiero. -->
 
-# watch mode
-$ pnpm run start:dev
+## Arquitectura
 
-# production mode
-$ pnpm run start:prod
-```
+| Componente | Carpeta | Tecnología | Puerto |
+|---|---|---|---|
+| ERP core (monolito modular) | `erp-core/` | _por definir_ | 3000 |
+| Servicio de IA | `ai-service/` | Python, FastAPI | 8000 |
+| Base de datos | — | PostgreSQL | 5432 |
 
-## Run tests
+El ERP registra las transacciones; el servicio de IA lee el historial, calcula los parámetros de inventario y los guarda para que el ERP genere las alertas.
+
+## Requisitos
+
+- Docker y Docker Compose
+- Git
+
+## Puesta en marcha
 
 ```bash
-# unit tests
-$ pnpm run test
-
-# e2e tests
-$ pnpm run test:e2e
-
-# test coverage
-$ pnpm run test:cov
+git clone <url-del-repositorio>
+cd pango
+cp .env.example .env      # ajusta los valores
+docker compose up --build
 ```
 
-## Deployment
+<!-- Verificación: validar(Esteban)
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+- ERP core: http://localhost:3000/health
+- Servicio de IA: http://localhost:8000/health
+ -->
+## Estructura del repositorio
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
+```
+pango/
+├── README.md
+├── .gitignore
+├── .env.example
+├── docker-compose.yml
+├── erp-core/          (código NestJS)
+│   ├── Dockerfile
+│   └── .dockerignore
+├── ai-service/
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── requirements.txt
+│   └── main.py
+├── notebooks/.gitkeep
+└── data/ (datasets)
+    ├── raw/.gitkeep
+    └── processed/.gitkeep
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Datos
 
-## Observability
+Los datasets no se incluyen en el repositorio (tamaño y licencias). Descárgalos y colócalos en `data/raw/`:
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+| Dataset | Uso | Fuente |
+|---|---|---|
+| Store Item Demand Forecasting Challenge | Desarrollo y prueba del pipeline | Kaggle |
+| Online Retail II | Prueba con demanda intermitente | UCI Machine Learning Repository |
+| Tienda Virtual del Estado Colombiano (`rgxm-mmea`) | Referencia de tiempos de entrega de proveedores | datos.gov.co |
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+## Flujo de trabajo
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+- **Ramas principales:** `main` (producción) y `develop` (integración).
+- **Ramas temporales:**
+  - `feature/<nombre>` → nace de `develop`, se fusiona en `develop`.
+  - `release/<x.y.z>` → nace de `develop`, se fusiona en `main` y `develop`.
+  - `hotfix/<x.y.z>` → nace de `main`, se fusiona en `main` y `develop`.
+  - `bugfix/<nombre>` → nace de `develop`, se fusiona en `develop`.
+- **Los cambios entran por Pull Request** desde las ramas temporales hacia su rama destino. Nunca se hace commit directo en `main` ni en `develop`.
+- **Mensajes de commit:** `feat:`, `fix:`, `docs:`, `chore:`.
+- **No subir** `.env`, credenciales ni datos crudos.
 
-To add it to this project:
+## Estado del proyecto
 
-```bash
-$ pnpm install @nestjs/observe
-```
+- [ ] Fase 0: decisiones de diseño
+- [ ] Fase 1: repositorio y entorno Docker
+- [ ] Fase 2: modelo de datos
+- [ ] Fase 3: datos y seeder
+- [ ] Fase 4: ERP core
+- [ ] Fase 5: modelo predictivo (notebook)
+- [ ] Fase 6: servicio de IA
+- [ ] Fase 7: alertas y panel
+- [ ] Fase 8: validación y piloto
 
-Then follow the [setup guide](https://docs.nestjs.com/observability/overview) - it takes a single import and an app key.
+## Licencia
 
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
+Por definir.
 
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Cuando decidas el stack del ERP, completa la fila de tecnología y la URL del clon.
