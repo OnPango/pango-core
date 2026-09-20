@@ -1,2 +1,10 @@
-service:
-  # TODO: definir servicios
+name: pango-core
+
+services:
+  api:
+    container_name: pango-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
