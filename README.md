@@ -57,15 +57,22 @@ docker compose up --build
 
 ```
 pango/
-├── docker-compose.yml
+├── README.md
+├── .gitignore
 ├── .env.example
-├── docs/                 # decisiones y documentación
-├── erp-core/             # monolito modular del ERP
-├── ai-service/           # servicio de predicción
-├── notebooks/            # exploración y validación del modelo
-└── data/
-    ├── raw/              # datos originales (no se versionan)
-    └── processed/        # datos limpios de trabajo
+├── docker-compose.yml
+├── erp-core/          (código NestJS)
+│   ├── Dockerfile
+│   └── .dockerignore
+├── ai-service/
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── requirements.txt
+│   └── main.py
+├── notebooks/.gitkeep
+└── data/ (datasets)
+    ├── raw/.gitkeep
+    └── processed/.gitkeep
 ```
 
 ## Datos
@@ -80,9 +87,15 @@ Los datasets no se incluyen en el repositorio (tamaño y licencias). Descárgalo
 
 ## Flujo de trabajo
 
-- Rama principal: `main`. Los cambios entran por Pull Request desde ramas `feature/<nombre>`.
-- Mensajes de commit: `feat:`, `fix:`, `docs:`, `chore:`.
-- No subir `.env`, credenciales ni datos crudos.
+- **Ramas principales:** `main` (producción) y `develop` (integración).
+- **Ramas temporales:**
+  - `feature/<nombre>` → nace de `develop`, se fusiona en `develop`.
+  - `release/<x.y.z>` → nace de `develop`, se fusiona en `main` y `develop`.
+  - `hotfix/<x.y.z>` → nace de `main`, se fusiona en `main` y `develop`.
+  - `bugfix/<nombre>` → nace de `develop`, se fusiona en `develop`.
+- **Los cambios entran por Pull Request** desde las ramas temporales hacia su rama destino. Nunca se hace commit directo en `main` ni en `develop`.
+- **Mensajes de commit:** `feat:`, `fix:`, `docs:`, `chore:`.
+- **No subir** `.env`, credenciales ni datos crudos.
 
 ## Estado del proyecto
 
