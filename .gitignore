@@ -9,3 +9,8 @@ node_modules/
 *.log
 .idea/
 .vscode/
+
+# Clientes generados por Prisma
+src/generated/
+dist/
+*.tsbuildinfo

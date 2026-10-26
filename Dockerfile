@@ -1,7 +1,7 @@
 FROM node:24-slim AS builder
 
 WORKDIR /app
-COPY package*.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN corepack enable pnpm
 RUN pnpm install
 COPY . .
@@ -11,7 +11,7 @@ FROM node:24-slim AS runtime
 
 WORKDIR /app
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 RUN corepack enable pnpm
 RUN pnpm install --prod
 
