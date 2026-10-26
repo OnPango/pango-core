@@ -1,0 +1,125 @@
+// Control plane (`public` schema): organizations, accounts, memberships and plans.
+// Shared by every organization. See docs/database.md.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../../src/generated/prisma/control"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+
+  @@map("organization_status")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+
+  @@map("subscription_status")
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+
+  @@map("membership_status")
+}
+
+/// Commercial plan with the limits it grants.
+model Plan {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique @db.VarChar(60)
+  maxUsers      Int      @map("max_users")
+  maxWarehouses Int      @map("max_warehouses")
+  monthlyPrice  Decimal  @map("monthly_price") @db.Decimal(12, 2)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+/// A customer organization (SME). Its data lives in the `schemaName` schema.
+model Organization {
+  id            Int                @id @default(autoincrement())
+  /// Colombian NIT.
+  taxId         String             @unique @map("tax_id") @db.VarChar(20)
+  legalName     String             @map("legal_name") @db.VarChar(150)
+  subdomain     String             @unique @db.VarChar(63)
+  /// `tenant_` + subdomain with `-` replaced by `_`.
+  schemaName    String             @unique @map("schema_name") @db.VarChar(63)
+  /// Number of tenant migrations applied to `schemaName`.
+  schemaVersion Int                @default(0) @map("schema_version")
+  status        OrganizationStatus @default(ACTIVE)
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  subscriptions Subscription[]
+  memberships   Membership[]
+
+  @@map("organizations")
+}
+
+model Subscription {
+  id             Int                @id @default(autoincrement())
+  organizationId Int                @map("organization_id")
+  planId         Int                @map("plan_id")
+  startDate      DateTime           @map("start_date") @db.Date
+  endDate        DateTime?          @map("end_date") @db.Date
+  status         SubscriptionStatus @default(ACTIVE)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([planId])
+  @@map("subscriptions")
+}
+
+/// Login identity (Cognito). One account can belong to several organizations.
+model Account {
+  id         Int      @id @default(autoincrement())
+  cognitoSub String   @unique @map("cognito_sub") @db.VarChar(64)
+  email      String   @unique @db.VarChar(150)
+  name       String   @db.VarChar(120)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  memberships Membership[]
+
+  @@map("accounts")
+}
+
+/// Account ↔ organization (N:M). Every request must find an ACTIVE membership
+/// before using the organization's tenant schema.
+model Membership {
+  accountId      Int              @map("account_id")
+  organizationId Int              @map("organization_id")
+  status         MembershipStatus @default(INVITED)
+  /// Set when the invitation is accepted.
+  joinedAt       DateTime?        @map("joined_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([accountId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}

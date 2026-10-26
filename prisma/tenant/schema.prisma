@@ -1,0 +1,807 @@
+// Per-organization schema template (`tenant_<slug>`). Every organization gets an
+// identical copy; customization is always rows, never new columns or tables.
+// The target schema is chosen with `?schema=` for migrations and with PrismaPg's
+// `schema` option at runtime. See docs/database.md.
+//
+// Constraints Prisma cannot express (CHECK, partial indexes, NULLS NOT DISTINCT)
+// are hand-written SQL at the end of the `init` migration.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../../src/generated/prisma/tenant"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum PermissionScope {
+  ORGANIZATION
+  WAREHOUSE
+
+  @@map("permission_scope")
+}
+
+enum AttributeDataType {
+  TEXT
+  NUMBER
+  DATE
+  BOOLEAN
+  LIST
+
+  @@map("attribute_data_type")
+}
+
+enum MovementNature {
+  INBOUND
+  OUTBOUND
+  TRANSFER
+  ADJUSTMENT
+
+  @@map("movement_nature")
+}
+
+enum MovementStatus {
+  DRAFT
+  IN_TRANSIT
+  CONFIRMED
+  VOIDED
+
+  @@map("movement_status")
+}
+
+enum StockRequestStatus {
+  PENDING
+  APPROVED
+  PARTIAL
+  FULFILLED
+  REJECTED
+  CANCELLED
+
+  @@map("stock_request_status")
+}
+
+enum Granularity {
+  WEEKLY
+  MONTHLY
+
+  @@map("granularity")
+}
+
+enum CostingMethod {
+  WEIGHTED_AVERAGE
+
+  @@map("costing_method")
+}
+
+enum ForecastRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+
+  @@map("forecast_run_status")
+}
+
+enum ForecastModel {
+  BASELINE
+  SARIMA
+  XGBOOST
+
+  @@map("forecast_model")
+}
+
+/// Syntetos–Boylan demand classification.
+enum DemandClass {
+  SMOOTH
+  INTERMITTENT
+  ERRATIC
+  LUMPY
+
+  @@map("demand_class")
+}
+
+enum ReplenishmentMethod {
+  MIN_MAX
+  FIXED_ROP
+  FORECAST_ROP
+
+  @@map("replenishment_method")
+}
+
+enum ValueSource {
+  MANUAL
+  CALCULATED
+
+  @@map("value_source")
+}
+
+enum AlertType {
+  BELOW_ROP
+  STOCKOUT
+  OVERSTOCK
+
+  @@map("alert_type")
+}
+
+enum AlertStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+
+  @@map("alert_status")
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+
+  @@map("notification_channel")
+}
+
+// ─── Users, access and settings ─────────────────────────────────────────────
+
+/// Organization-wide settings. Single row (id = 1, enforced by a CHECK).
+model Settings {
+  id                          Int           @id @default(1) @db.SmallInt
+  /// ISO 4217 code.
+  currency                    String        @default("COP") @db.Char(3)
+  /// IANA time zone.
+  timeZone                    String        @default("America/Bogota") @map("time_zone") @db.VarChar(40)
+  forecastGranularity         Granularity   @default(WEEKLY) @map("forecast_granularity")
+  costingMethod               CostingMethod @default(WEIGHTED_AVERAGE) @map("costing_method")
+  allowNegativeStock          Boolean       @default(false) @map("allow_negative_stock")
+  /// Proposes the default `StockRequest.reservationExpiresAt`.
+  reservationExpiryDays       Int?          @map("reservation_expiry_days")
+  /// Movement type used for automatic replenishment drafts.
+  replenishmentMovementTypeId Int?          @map("replenishment_movement_type_id")
+  updatedAt                   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  replenishmentMovementType MovementType? @relation(fields: [replenishmentMovementTypeId], references: [id], onDelete: SetNull)
+
+  @@index([replenishmentMovementTypeId])
+  @@map("settings")
+}
+
+/// Internal area that requests and consumes stock.
+model Department {
+  id         Int      @id @default(autoincrement())
+  name       String   @unique @db.VarChar(80)
+  costCenter String?  @map("cost_center") @db.VarChar(30)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  users         User[]
+  movements     Movement[]
+  stockRequests StockRequest[]
+
+  @@map("departments")
+}
+
+/// An account's profile inside this organization.
+model User {
+  id           Int      @id @default(autoincrement())
+  /// Logical reference to public.accounts.id (no FK: crosses schemas).
+  accountId    Int      @unique @map("account_id")
+  departmentId Int?     @map("department_id")
+  jobTitle     String?  @map("job_title") @db.VarChar(80)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  department          Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  roleAssignments     RoleAssignment[]
+  registeredMovements Movement[]       @relation("MovementRegisteredBy")
+  receivedMovements   Movement[]       @relation("MovementReceivedBy")
+  stockRequests       StockRequest[]
+  notifications       Notification[]
+
+  @@index([departmentId])
+  @@map("users")
+}
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(60)
+  description String?
+  /// System roles (Owner) cannot be deleted and keep every permission.
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  permissions       RolePermission[]
+  assignments       RoleAssignment[]
+  movementTypes     RoleMovementType[]
+  notificationRules NotificationRule[]
+
+  @@map("roles")
+}
+
+/// Fixed catalog seeded by migrations; organizations only group permissions into roles.
+model Permission {
+  id          Int             @id @default(autoincrement())
+  code        String          @unique @db.VarChar(60)
+  module      String          @db.VarChar(40)
+  /// ORGANIZATION permissions only count on assignments with no warehouse.
+  scope       PermissionScope
+  description String
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       Int @map("role_id")
+  permissionId Int @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+/// Grants a role to a user on one warehouse, or on every warehouse when `warehouseId` is NULL.
+/// Unique (user_id, role_id, warehouse_id) NULLS NOT DISTINCT — see the `init` migration.
+model RoleAssignment {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  roleId      Int      @map("role_id")
+  warehouseId Int?     @map("warehouse_id")
+  assignedAt  DateTime @default(now()) @map("assigned_at") @db.Timestamptz
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@index([roleId])
+  @@index([warehouseId])
+  @@map("role_assignments")
+}
+
+/// Movement types a role is allowed to register.
+model RoleMovementType {
+  roleId         Int @map("role_id")
+  movementTypeId Int @map("movement_type_id")
+
+  role         Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  movementType MovementType @relation(fields: [movementTypeId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, movementTypeId])
+  @@index([movementTypeId])
+  @@map("role_movement_types")
+}
+
+/// Which roles get notified of which alert types, and through which channel.
+model NotificationRule {
+  id        Int                 @id @default(autoincrement())
+  roleId    Int                 @map("role_id")
+  alertType AlertType           @map("alert_type")
+  channel   NotificationChannel
+  isActive  Boolean             @default(true) @map("is_active")
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, alertType, channel])
+  @@map("notification_rules")
+}
+
+// ─── Catalog ────────────────────────────────────────────────────────────────
+
+/// Product category tree.
+model Category {
+  id          Int      @id @default(autoincrement())
+  parentId    Int?     @map("parent_id")
+  name        String   @db.VarChar(80)
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  parent     Category?         @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children   Category[]        @relation("CategoryTree")
+  products   Product[]
+  attributes CustomAttribute[]
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+model UnitOfMeasure {
+  id   Int    @id @default(autoincrement())
+  code String @unique @db.VarChar(10)
+  name String @db.VarChar(40)
+
+  products  Product[]
+  locations Location[]
+
+  @@map("units_of_measure")
+}
+
+model Product {
+  id              Int      @id @default(autoincrement())
+  sku             String   @unique @db.VarChar(40)
+  categoryId      Int      @map("category_id")
+  unitOfMeasureId Int      @map("unit_of_measure_id")
+  name            String   @db.VarChar(150)
+  description     String?
+  /// Lots are only allowed for products that track them.
+  tracksLots      Boolean  @default(false) @map("tracks_lots")
+  isActive        Boolean  @default(true) @map("is_active")
+  /// Cache: recalculated when inbound movements are confirmed.
+  averageCost     Decimal  @default(0) @map("average_cost") @db.Decimal(14, 4)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  category          Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  unitOfMeasure     UnitOfMeasure      @relation(fields: [unitOfMeasureId], references: [id], onDelete: Restrict)
+  supplierProducts  SupplierProduct[]
+  attributeValues   AttributeValue[]
+  warehouses        ProductWarehouse[]
+  lots              Lot[]
+  movementLines     MovementLine[]
+  stockRequestLines StockRequestLine[]
+
+  @@index([categoryId])
+  @@index([unitOfMeasureId])
+  @@map("products")
+}
+
+model Supplier {
+  id        Int      @id @default(autoincrement())
+  /// Colombian NIT.
+  taxId     String   @unique @map("tax_id") @db.VarChar(20)
+  legalName String   @map("legal_name") @db.VarChar(150)
+  phone     String?  @db.VarChar(30)
+  email     String?  @db.VarChar(150)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  supplierProducts SupplierProduct[]
+  movements        Movement[]
+
+  @@map("suppliers")
+}
+
+/// Products a supplier sells, with price and lead time. At most one preferred
+/// supplier per product (partial unique index in the `init` migration).
+model SupplierProduct {
+  supplierId    Int      @map("supplier_id")
+  productId     Int      @map("product_id")
+  purchasePrice Decimal  @map("purchase_price") @db.Decimal(14, 4)
+  leadTimeDays  Int      @map("lead_time_days")
+  isPreferred   Boolean  @default(false) @map("is_preferred")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([supplierId, productId])
+  @@index([productId])
+  @@map("supplier_products")
+}
+
+/// Organization-defined product field (EAV). NULL category = applies to every product.
+model CustomAttribute {
+  id         Int               @id @default(autoincrement())
+  categoryId Int?              @map("category_id")
+  name       String            @unique @db.VarChar(60)
+  /// Cannot change once the attribute has values.
+  dataType   AttributeDataType @map("data_type")
+  /// Enforced when creating products of its category.
+  isRequired Boolean           @default(false) @map("is_required")
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  category Category?         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  options  AttributeOption[]
+  values   AttributeValue[]
+
+  @@index([categoryId])
+  @@map("custom_attributes")
+}
+
+/// Allowed values of a LIST attribute.
+model AttributeOption {
+  id          Int    @id @default(autoincrement())
+  attributeId Int    @map("attribute_id")
+  value       String @db.VarChar(80)
+  sortOrder   Int    @default(0) @map("sort_order")
+
+  attribute CustomAttribute  @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  values    AttributeValue[]
+
+  @@unique([attributeId, value])
+  @@map("attribute_options")
+}
+
+/// Exactly one value column is set (CHECK), and it must match the attribute's data type.
+model AttributeValue {
+  productId    Int       @map("product_id")
+  attributeId  Int       @map("attribute_id")
+  textValue    String?   @map("text_value")
+  numberValue  Decimal?  @map("number_value") @db.Decimal(18, 6)
+  dateValue    DateTime? @map("date_value") @db.Date
+  booleanValue Boolean?  @map("boolean_value")
+  /// For LIST attributes; the option must belong to the same attribute.
+  optionId     Int?      @map("option_id")
+
+  product   Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attribute CustomAttribute  @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  option    AttributeOption? @relation(fields: [optionId], references: [id], onDelete: Restrict)
+
+  @@id([productId, attributeId])
+  @@index([attributeId])
+  @@index([optionId])
+  @@map("attribute_values")
+}
+
+// ─── Warehouse ──────────────────────────────────────────────────────────────
+
+model Warehouse {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique @db.VarChar(20)
+  name      String   @db.VarChar(80)
+  address   String?  @db.VarChar(200)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  roleAssignments RoleAssignment[]
+  locationLevels  LocationLevel[]
+  products        ProductWarehouse[]
+  stockRequests   StockRequest[]
+
+  @@map("warehouses")
+}
+
+/// Named level of a warehouse's location hierarchy (e.g. zone → aisle → shelf).
+model LocationLevel {
+  id          Int    @id @default(autoincrement())
+  warehouseId Int    @map("warehouse_id")
+  name        String @db.VarChar(40)
+  /// 1 = top level. A location's parent sits on the level with depth - 1.
+  depth       Int    @db.SmallInt
+
+  warehouse Warehouse  @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  locations Location[]
+
+  @@unique([warehouseId, depth])
+  @@map("location_levels")
+}
+
+/// Physical place where stock is kept. Its parent belongs to the same warehouse.
+model Location {
+  id             Int      @id @default(autoincrement())
+  levelId        Int      @map("level_id")
+  parentId       Int?     @map("parent_id")
+  code           String   @unique @db.VarChar(40)
+  capacity       Decimal? @db.Decimal(14, 4)
+  capacityUnitId Int?     @map("capacity_unit_id")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  level                    LocationLevel      @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  parent                   Location?          @relation("LocationTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children                 Location[]         @relation("LocationTree")
+  capacityUnit             UnitOfMeasure?     @relation(fields: [capacityUnitId], references: [id], onDelete: SetNull)
+  defaultForProducts       ProductWarehouse[]
+  stockBalances            StockBalance[]
+  originMovementLines      MovementLine[]     @relation("MovementLineOrigin")
+  destinationMovementLines MovementLine[]     @relation("MovementLineDestination")
+
+  @@index([levelId])
+  @@index([parentId])
+  @@index([capacityUnitId])
+  @@map("locations")
+}
+
+/// A product enabled in a warehouse, with its replenishment parameters.
+model ProductWarehouse {
+  id                  Int                 @id @default(autoincrement())
+  productId           Int                 @map("product_id")
+  warehouseId         Int                 @map("warehouse_id")
+  /// Must belong to the same warehouse.
+  defaultLocationId   Int?                @map("default_location_id")
+  baseForecastId      Int?                @map("base_forecast_id")
+  replenishmentMethod ReplenishmentMethod @default(FIXED_ROP) @map("replenishment_method")
+  /// Target cycle service level, in (0, 1).
+  serviceLevel        Decimal             @default(0.95) @map("service_level") @db.Decimal(4, 3)
+  leadTimeDays        Int                 @default(7) @map("lead_time_days")
+  minStock            Decimal?            @map("min_stock") @db.Decimal(14, 4)
+  maxStock            Decimal?            @map("max_stock") @db.Decimal(14, 4)
+  safetyStock         Decimal             @default(0) @map("safety_stock") @db.Decimal(14, 4)
+  /// Compared against available stock (on hand − reserved), not on hand.
+  reorderPoint        Decimal             @default(0) @map("reorder_point") @db.Decimal(14, 4)
+  /// Whether the parameters above were set by hand or computed by the forecast.
+  valueSource         ValueSource         @default(MANUAL) @map("value_source")
+  isActive            Boolean             @default(true) @map("is_active")
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  product         Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  warehouse       Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  defaultLocation Location?      @relation(fields: [defaultLocationId], references: [id], onDelete: SetNull)
+  baseForecast    Forecast?      @relation("ProductWarehouseBaseForecast", fields: [baseForecastId], references: [id], onDelete: SetNull)
+  stockBalances   StockBalance[]
+  forecasts       Forecast[]     @relation("ForecastProductWarehouse")
+  alerts          Alert[]
+
+  @@unique([productId, warehouseId])
+  @@index([warehouseId])
+  @@index([defaultLocationId])
+  @@index([baseForecastId])
+  @@map("product_warehouses")
+}
+
+model Lot {
+  id              Int       @id @default(autoincrement())
+  productId       Int       @map("product_id")
+  code            String    @db.VarChar(40)
+  manufactureDate DateTime? @map("manufacture_date") @db.Date
+  expiryDate      DateTime? @map("expiry_date") @db.Date
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  product       Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  stockBalances StockBalance[]
+  movementLines MovementLine[]
+
+  @@unique([productId, code])
+  @@map("lots")
+}
+
+/// Materialized on-hand quantity per product-warehouse, location and lot.
+/// Only changes when movements are confirmed. Unique (product_warehouse_id,
+/// location_id, lot_id) NULLS NOT DISTINCT — see the `init` migration.
+model StockBalance {
+  id                 Int      @id @default(autoincrement())
+  productWarehouseId Int      @map("product_warehouse_id")
+  /// Must belong to the product-warehouse's warehouse.
+  locationId         Int      @map("location_id")
+  lotId              Int?     @map("lot_id")
+  quantity           Decimal  @default(0) @db.Decimal(14, 4)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  productWarehouse ProductWarehouse @relation(fields: [productWarehouseId], references: [id], onDelete: Restrict)
+  location         Location         @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  lot              Lot?             @relation(fields: [lotId], references: [id], onDelete: Restrict)
+
+  @@index([locationId])
+  @@index([lotId])
+  @@map("stock_balances")
+}
+
+// ─── Movements ──────────────────────────────────────────────────────────────
+
+model MovementType {
+  id             Int            @id @default(autoincrement())
+  name           String         @unique @db.VarChar(60)
+  nature         MovementNature
+  /// Confirmed movements of this type feed the demand history.
+  countsAsDemand Boolean        @default(false) @map("counts_as_demand")
+  /// Seeded by migrations; cannot be deleted.
+  isBase         Boolean        @default(false) @map("is_base")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  replenishmentSettings Settings[]
+  roles                 RoleMovementType[]
+  movements             Movement[]
+
+  @@map("movement_types")
+}
+
+/// Stock movement header. Movements are never deleted: a confirmed movement is
+/// voided by a reversing movement that points to it through `reversalOfId`.
+model Movement {
+  id             Int            @id @default(autoincrement())
+  number         String         @unique @db.VarChar(20)
+  movementTypeId Int            @map("movement_type_id")
+  registeredById Int            @map("registered_by_id")
+  receivedById   Int?           @map("received_by_id")
+  stockRequestId Int?           @map("stock_request_id")
+  supplierId     Int?           @map("supplier_id")
+  departmentId   Int?           @map("department_id")
+  reversalOfId   Int?           @unique @map("reversal_of_id")
+  status         MovementStatus @default(DRAFT)
+  occurredAt     DateTime       @default(now()) @map("occurred_at") @db.Timestamptz
+  /// Set when an inter-warehouse transfer is received.
+  receivedAt     DateTime?      @map("received_at") @db.Timestamptz
+  documentRef    String?        @map("document_ref") @db.VarChar(40)
+  notes          String?
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  movementType MovementType   @relation(fields: [movementTypeId], references: [id], onDelete: Restrict)
+  registeredBy User           @relation("MovementRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
+  receivedBy   User?          @relation("MovementReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  stockRequest StockRequest?  @relation(fields: [stockRequestId], references: [id], onDelete: Restrict)
+  supplier     Supplier?      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  department   Department?    @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  reversalOf   Movement?      @relation("MovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversedBy   Movement?      @relation("MovementReversal")
+  lines        MovementLine[]
+  alert        Alert?
+
+  @@index([movementTypeId])
+  @@index([registeredById])
+  @@index([receivedById])
+  @@index([stockRequestId])
+  @@index([supplierId])
+  @@index([departmentId])
+  @@index([status])
+  @@index([occurredAt])
+  @@map("movements")
+}
+
+/// Movement line. Required locations depend on the type's nature:
+/// INBOUND → destination; OUTBOUND → origin; TRANSFER → both;
+/// ADJUSTMENT → destination (increase) or origin (decrease).
+model MovementLine {
+  movementId            Int      @map("movement_id")
+  lineNumber            Int      @map("line_number") @db.SmallInt
+  productId             Int      @map("product_id")
+  originLocationId      Int?     @map("origin_location_id")
+  destinationLocationId Int?     @map("destination_location_id")
+  lotId                 Int?     @map("lot_id")
+  quantity              Decimal  @db.Decimal(14, 4)
+  /// Quantity received at the destination of an inter-warehouse transfer.
+  receivedQuantity      Decimal? @map("received_quantity") @db.Decimal(14, 4)
+  unitCost              Decimal  @default(0) @map("unit_cost") @db.Decimal(14, 4)
+
+  movement            Movement  @relation(fields: [movementId], references: [id], onDelete: Cascade)
+  product             Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  originLocation      Location? @relation("MovementLineOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
+  destinationLocation Location? @relation("MovementLineDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
+  lot                 Lot?      @relation(fields: [lotId], references: [id], onDelete: Restrict)
+
+  @@id([movementId, lineNumber])
+  @@index([productId])
+  @@index([originLocationId])
+  @@index([destinationLocationId])
+  @@index([lotId])
+  @@map("movement_lines")
+}
+
+// ─── Stock requests ─────────────────────────────────────────────────────────
+
+/// Internal request for stock from a department. Approving it reserves stock.
+model StockRequest {
+  id                   Int                @id @default(autoincrement())
+  number               String             @unique @db.VarChar(20)
+  requestedById        Int                @map("requested_by_id")
+  departmentId         Int                @map("department_id")
+  warehouseId          Int                @map("warehouse_id")
+  status               StockRequestStatus @default(PENDING)
+  /// 1 = highest.
+  priority             Int                @default(2) @db.SmallInt
+  requiredDate         DateTime?          @map("required_date") @db.Date
+  /// When set, reservations are released automatically after this instant.
+  reservationExpiresAt DateTime?          @map("reservation_expires_at") @db.Timestamptz
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  requestedBy User               @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  department  Department         @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  warehouse   Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  lines       StockRequestLine[]
+  movements   Movement[]
+
+  @@index([warehouseId, status])
+  @@index([requestedById])
+  @@index([departmentId])
+  @@map("stock_requests")
+}
+
+model StockRequestLine {
+  stockRequestId    Int     @map("stock_request_id")
+  lineNumber        Int     @map("line_number") @db.SmallInt
+  productId         Int     @map("product_id")
+  requestedQuantity Decimal @map("requested_quantity") @db.Decimal(14, 4)
+  /// Reserved on approval, up to the warehouse's available stock.
+  reservedQuantity  Decimal @default(0) @map("reserved_quantity") @db.Decimal(14, 4)
+
+  stockRequest StockRequest @relation(fields: [stockRequestId], references: [id], onDelete: Cascade)
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@id([stockRequestId, lineNumber])
+  @@index([productId])
+  @@map("stock_request_lines")
+}
+
+// ─── Forecasting and alerts ─────────────────────────────────────────────────
+
+/// One execution of the forecasting service over the organization's demand history.
+model ForecastRun {
+  id          Int               @id @default(autoincrement())
+  granularity Granularity
+  /// Number of periods forecast.
+  horizon     Int               @db.SmallInt
+  status      ForecastRunStatus @default(RUNNING)
+  startedAt   DateTime          @default(now()) @map("started_at") @db.Timestamptz
+  finishedAt  DateTime?         @map("finished_at") @db.Timestamptz
+
+  forecasts Forecast[]
+
+  @@map("forecast_runs")
+}
+
+/// Forecast for one product-warehouse in a run. At most one current forecast per
+/// product-warehouse (partial unique index in the `init` migration).
+model Forecast {
+  id                 Int           @id @default(autoincrement())
+  runId              Int           @map("run_id")
+  productWarehouseId Int           @map("product_warehouse_id")
+  model              ForecastModel
+  demandClass        DemandClass   @map("demand_class")
+  /// e.g. MAE, RMSE, MASE.
+  errorMetric        String        @map("error_metric") @db.VarChar(10)
+  errorValue         Decimal       @map("error_value") @db.Decimal(14, 6)
+  isCurrent          Boolean       @default(false) @map("is_current")
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
+
+  run               ForecastRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  productWarehouse  ProductWarehouse   @relation("ForecastProductWarehouse", fields: [productWarehouseId], references: [id], onDelete: Cascade)
+  baseForWarehouses ProductWarehouse[] @relation("ProductWarehouseBaseForecast")
+  periods           ForecastPeriod[]
+
+  @@index([runId])
+  @@index([productWarehouseId])
+  @@map("forecasts")
+}
+
+model ForecastPeriod {
+  forecastId      Int      @map("forecast_id")
+  periodStart     DateTime @map("period_start") @db.Date
+  estimatedDemand Decimal  @map("estimated_demand") @db.Decimal(14, 4)
+  lowerBound      Decimal  @map("lower_bound") @db.Decimal(14, 4)
+  upperBound      Decimal  @map("upper_bound") @db.Decimal(14, 4)
+
+  forecast Forecast @relation(fields: [forecastId], references: [id], onDelete: Cascade)
+
+  @@id([forecastId, periodStart])
+  @@map("forecast_periods")
+}
+
+/// Stock alert. A BELOW_ROP alert creates a DRAFT replenishment movement; confirming
+/// that movement resolves the alert.
+model Alert {
+  id                 Int         @id @default(autoincrement())
+  productWarehouseId Int         @map("product_warehouse_id")
+  draftMovementId    Int?        @unique @map("draft_movement_id")
+  type               AlertType
+  /// 1 = lowest.
+  severity           Int         @default(1) @db.SmallInt
+  status             AlertStatus @default(OPEN)
+  suggestedQuantity  Decimal     @default(0) @map("suggested_quantity") @db.Decimal(14, 4)
+  message            String
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  resolvedAt         DateTime?   @map("resolved_at") @db.Timestamptz
+
+  productWarehouse ProductWarehouse @relation(fields: [productWarehouseId], references: [id], onDelete: Restrict)
+  draftMovement    Movement?        @relation(fields: [draftMovementId], references: [id], onDelete: SetNull)
+  notifications    Notification[]
+
+  @@index([productWarehouseId, status])
+  @@map("alerts")
+}
+
+model Notification {
+  alertId   Int                 @map("alert_id")
+  userId    Int                 @map("user_id")
+  channel   NotificationChannel
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  readAt    DateTime?           @map("read_at") @db.Timestamptz
+
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([alertId, userId, channel])
+  @@index([userId])
+  @@map("notifications")
+}
