@@ -48,6 +48,18 @@ cp .env.example .env      # ajusta los valores
 docker compose up --build
 ```
 
+## Database
+
+PostgreSQL on Supabase, one schema per tenant: `public` is the control plane and every organization gets its own `tenant_<slug>` schema. Design, conventions and workflows: [`docs/database.md`](docs/database.md).
+
+```bash
+pnpm prisma:generate        # generate both Prisma clients into src/generated/prisma
+pnpm db:migrate:control     # apply the public schema migrations
+pnpm tenant:create --subdomain demo --tax-id 900000000-1 --legal-name "Demo SME SAS" \
+  --email owner@demo.pango.local --name "Demo Owner"
+pnpm tenant:migrate         # apply tenant migrations to every organization
+```
+
 <!-- Verificación: validar(Esteban)
 
 - ERP core: http://localhost:3000/health
