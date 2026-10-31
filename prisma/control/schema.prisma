@@ -1,4 +1,4 @@
-// Control plane (`public` schema): organizations, accounts, memberships and plans.
+// Control plane (`public` schema): organizations, accounts, organization members and plans.
 // Shared by every organization. See docs/database.md.
 
 generator client {
@@ -67,7 +67,7 @@ model Organization {
   updatedAt     DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   subscriptions Subscription[]
-  memberships   Membership[]
+  memberships   OrganizationMember[]
 
   @@map("organizations")
 }
@@ -100,14 +100,14 @@ model Account {
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  memberships Membership[]
+  memberships OrganizationMember[]
 
   @@map("accounts")
 }
 
-/// Account ↔ organization (N:M). Every request must find an ACTIVE membership
+/// Account ←→ organization (N:M). Every request must find an ACTIVE membership
 /// before using the organization's tenant schema.
-model Membership {
+model OrganizationMember {
   accountId      Int              @map("account_id")
   organizationId Int              @map("organization_id")
   status         MembershipStatus @default(INVITED)
@@ -121,5 +121,5 @@ model Membership {
 
   @@id([accountId, organizationId])
   @@index([organizationId])
-  @@map("memberships")
+  @@map("organization_members")
 }
