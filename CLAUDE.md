@@ -35,7 +35,7 @@ Prisma CLI calls always need `--config prisma/control.config.ts` or `--config pr
 
 **Schema-per-tenant on Supabase PostgreSQL**, accessed directly from the backend with Prisma 7 (Supabase's REST API is not used).
 
-- `public` = control plane (organizations, accounts, memberships, plans). `tenant_<slug>` = one identical copy of the tenant template per organization. Tenant tables have no `organization_id`; the schema is the isolation boundary.
+- `public` = control plane (organizations, accounts, organization_members, plans). `tenant_<slug>` = one identical copy of the tenant template per organization. Tenant tables have no `organization_id`; the schema is the isolation boundary.
 - Customization is always rows, never new columns/tables, so every tenant schema stays identical and one migration updates all of them.
 - Two independent Prisma setups, each with its own schema, migrations folder and generated client (`src/generated/` is gitignored, regenerate after schema changes):
   - `prisma/control/` + `prisma/control.config.ts`

@@ -11,7 +11,7 @@ Models carry `///` doc comments, which also show up in the generated clients.
 
 - **PostgreSQL 15+ on Supabase**, accessed directly from the NestJS backend through Prisma 7 and `@prisma/adapter-pg`. The Supabase REST API is not used.
 - **Schema per tenant**:
-  - `public`: control plane (organizations, accounts, memberships, plans). One shared copy.
+  - `public`: control plane (organizations, accounts, organization_members, plans). One shared copy.
   - `tenant_<slug>`: an identical copy of the tenant template per organization (e.g. `tenant_acme_co`). Tenant tables have no `organization_id`; the schema is the isolation boundary.
 - **Customization is always rows, never columns or tables.** Every tenant schema stays identical, so one migration updates all of them.
 - **Two Prisma setups**, each with its own schema, migrations folder, config and generated client (`src/generated/prisma/{control,tenant}`).
@@ -42,7 +42,7 @@ Models carry `///` doc comments, which also show up in the generated clients.
 | `organizations` | Customer organizations. `schema_name` points to their tenant schema; `schema_version` is the number of tenant migrations applied. |
 | `subscriptions` | Plan history per organization. |
 | `accounts` | Login identities (Cognito `sub` + email). |
-| `memberships` | Account ↔ organization (N:M), with `INVITED → ACTIVE → SUSPENDED` status and `joined_at`. |
+| `organization_members` | Account ↔ organization (N:M), with `INVITED → ACTIVE → SUSPENDED` status and `joined_at`. |
 
 Rules:
 
@@ -214,7 +214,7 @@ Never edit a migration that has already been applied; add a new one.
 2. `CREATE SCHEMA "tenant_<slug>"`.
 3. `prisma migrate deploy` against that schema.
 4. Create the creator's `user` with an Owner `role_assignment` (`warehouse_id` NULL).
-5. Insert the `organization` and its `ACTIVE` `membership` in `public`.
+5. Insert the `organization` and its `ACTIVE` `organization_members` row in `public`.
 6. If anything fails, `DROP SCHEMA ... CASCADE`.
 
 ## Changes from the original design
