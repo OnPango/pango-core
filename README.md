@@ -56,7 +56,8 @@ PostgreSQL on Supabase, one schema per tenant: `public` is the control plane and
 pnpm prisma:generate        # generate both Prisma clients into src/generated/prisma
 pnpm db:migrate:control     # apply the public schema migrations
 pnpm tenant:create --subdomain demo --tax-id 900000000-1 --legal-name "Demo SME SAS" \
-  --email owner@demo.pango.local --name "Demo Owner"
+  --country CO --city Bogotá --business-sector RETAIL --team-size SIZE_1_5 \
+  --product-count COUNT_1_100 --email owner@demo.pango.local --name "Demo Owner"
 pnpm tenant:migrate         # apply tenant migrations to every organization
 ```
 

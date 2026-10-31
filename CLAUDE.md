@@ -23,7 +23,8 @@ pnpm test:e2e                       # vitest with vitest.config.e2e.ts (**/*.e2e
 pnpm prisma:generate                # generates both clients into src/generated/prisma/{control,tenant}
 pnpm db:migrate:control             # prisma migrate deploy for the public schema
 pnpm tenant:create --subdomain demo --tax-id 900000000-1 --legal-name "Demo SME SAS" \
-  --email owner@demo.pango.local --name "Demo Owner"
+  --country CO --city Bogotá --business-sector RETAIL --team-size SIZE_1_5 \
+  --product-count COUNT_1_100 --email owner@demo.pango.local --name "Demo Owner"
 pnpm tenant:migrate                 # migrate deploy on every tenant + update schema_version
 ```
 

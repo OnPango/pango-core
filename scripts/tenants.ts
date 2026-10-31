@@ -1,7 +1,9 @@
 // Provisions and migrates tenant schemas.
 //
-//   pnpm tenant:create --subdomain demo --tax-id 900000000-1 --legal-name "Demo SAS" \
-//                      --email owner@demo.co --name "Demo Owner" [--cognito-sub <sub>]
+//   pnpm tenant:create --subdomain demo --legal-name "Demo SAS" --country CO --city Bogotá \
+//                      --business-sector RETAIL --team-size SIZE_1_5 --product-count COUNT_1_100 \
+//                      --email owner@demo.co --name "Demo Owner" \
+//                      [--tax-id 900000000-1] [--contact-phone <phone>] [--cognito-sub <sub>]
 //   pnpm tenant:migrate           # migrates every tenant registered in public.organizations
 import 'dotenv/config';
 import { execFileSync } from 'node:child_process';
@@ -9,6 +11,11 @@ import { parseArgs } from 'node:util';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PrismaClient as ControlClient } from '../src/generated/prisma/control/client.js';
+import {
+  BusinessSector,
+  ProductCount,
+  TeamSize,
+} from '../src/generated/prisma/control/enums.js';
 import { PrismaClient as TenantClient } from '../src/generated/prisma/tenant/client.js';
 import {
   assertTenantSchema,
@@ -36,6 +43,18 @@ function migrateSchema(schema: string) {
   );
 }
 
+function parseEnum<T extends string>(
+  option: string,
+  value: string,
+  values: Record<string, T>,
+): T {
+  const allowed = Object.values(values);
+  if (!allowed.includes(value as T)) {
+    throw new Error(`--${option} must be one of: ${allowed.join(', ')}`);
+  }
+  return value as T;
+}
+
 async function appliedMigrations(db: pg.Client, schema: string) {
   const { rows } = await db.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM "${assertTenantSchema(schema)}"."_prisma_migrations"
@@ -51,19 +70,52 @@ async function create(args: string[]) {
       subdomain: { type: 'string' },
       'tax-id': { type: 'string' },
       'legal-name': { type: 'string' },
+      country: { type: 'string' },
+      city: { type: 'string' },
+      'business-sector': { type: 'string' },
+      'team-size': { type: 'string' },
+      'product-count': { type: 'string' },
+      'contact-phone': { type: 'string' },
       email: { type: 'string' },
       name: { type: 'string' },
       'cognito-sub': { type: 'string' },
     },
   });
-  const { subdomain, email, name } = values;
-  const taxId = values['tax-id'];
+  const { subdomain, city, email, name } = values;
   const legalName = values['legal-name'];
-  if (!subdomain || !taxId || !legalName || !email || !name) {
+  const country = values.country?.toUpperCase();
+  if (
+    !subdomain ||
+    !legalName ||
+    !country ||
+    !city ||
+    !values['business-sector'] ||
+    !values['team-size'] ||
+    !values['product-count'] ||
+    !email ||
+    !name
+  ) {
     throw new Error(
-      'Usage: tenant:create --subdomain --tax-id --legal-name --email --name [--cognito-sub]',
+      'Usage: tenant:create --subdomain --legal-name --country --city --business-sector ' +
+        '--team-size --product-count --email --name [--tax-id] [--contact-phone] [--cognito-sub]',
     );
   }
+  if (!/^[A-Z]{2}$/.test(country)) {
+    throw new Error('--country must be an ISO 3166-1 alpha-2 code (e.g. CO)');
+  }
+  const businessSector = parseEnum(
+    'business-sector',
+    values['business-sector'],
+    BusinessSector,
+  );
+  const teamSize = parseEnum('team-size', values['team-size'], TeamSize);
+  const productCount = parseEnum(
+    'product-count',
+    values['product-count'],
+    ProductCount,
+  );
+  const taxId = values['tax-id'];
+  const contactPhone = values['contact-phone'];
   const cognitoSub = values['cognito-sub'] ?? `local|${email}`;
 
   // 1. Validate the subdomain and derive the schema name.
@@ -121,6 +173,12 @@ async function create(args: string[]) {
         data: {
           taxId,
           legalName,
+          country,
+          city,
+          businessSector,
+          teamSize,
+          productCount,
+          contactPhone,
           subdomain,
           schemaName: schema,
           schemaVersion,

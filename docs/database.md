@@ -39,13 +39,14 @@ Models carry `///` doc comments, which also show up in the generated clients.
 | Table | Purpose |
 |---|---|
 | `plans` | Commercial plans and the limits they grant (`max_users`, `max_warehouses`). |
-| `organizations` | Customer organizations. `schema_name` points to their tenant schema; `schema_version` is the number of tenant migrations applied. |
+| `organizations` | Customer organizations. `schema_name` points to their tenant schema; `schema_version` is the number of tenant migrations applied. Profile: optional `tax_id` (NIT, unique when present), `country` (ISO 3166-1 alpha-2), `city`, `business_sector`, `team_size` and `product_count` (range enums), optional `contact_phone`. |
 | `subscriptions` | Plan history per organization. |
 | `accounts` | Login identities (Cognito `sub` + email). |
 | `organization_members` | Account ↔ organization (N:M), with `INVITED → ACTIVE → SUSPENDED` status and `joined_at`. |
 
 Rules:
 
+- `organizations.country` is checked against `^[A-Z]{2}$` (`organizations_country_chk`, hand-written in the migration).
 - `organizations.schema_name` = `tenant_` + subdomain with `-` replaced by `_`. Validate it against `^tenant_[a-z0-9_]{2,41}$` (`assertTenantSchema`) before interpolating it into SQL.
 - On every request, verify that an `ACTIVE` membership exists for (account, organization) **before** using the tenant schema.
 

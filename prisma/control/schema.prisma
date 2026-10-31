@@ -36,6 +36,44 @@ enum MembershipStatus {
   @@map("membership_status")
 }
 
+enum BusinessSector {
+  RETAIL
+  WHOLESALE
+  MANUFACTURING
+  FOOD_AND_BEVERAGE
+  PHARMACY_AND_HEALTH
+  HARDWARE_AND_CONSTRUCTION
+  FASHION_AND_APPAREL
+  TECHNOLOGY
+  AGRICULTURE
+  SERVICES
+  OTHER
+
+  @@map("business_sector")
+}
+
+/// Number of people on the organization's team, as a range.
+enum TeamSize {
+  SIZE_1_5
+  SIZE_6_20
+  SIZE_21_50
+  SIZE_51_200
+  SIZE_201_PLUS
+
+  @@map("team_size")
+}
+
+/// Number of products the organization manages, as a range.
+enum ProductCount {
+  COUNT_1_100
+  COUNT_101_500
+  COUNT_501_2000
+  COUNT_2001_10000
+  COUNT_10001_PLUS
+
+  @@map("product_count")
+}
+
 /// Commercial plan with the limits it grants.
 model Plan {
   id            Int      @id @default(autoincrement())
@@ -53,18 +91,25 @@ model Plan {
 
 /// A customer organization (SME). Its data lives in the `schemaName` schema.
 model Organization {
-  id            Int                @id @default(autoincrement())
-  /// Colombian NIT.
-  taxId         String             @unique @map("tax_id") @db.VarChar(20)
-  legalName     String             @map("legal_name") @db.VarChar(150)
-  subdomain     String             @unique @db.VarChar(63)
+  id             Int                @id @default(autoincrement())
+  /// Colombian NIT. Optional; unique when present.
+  taxId          String?            @unique @map("tax_id") @db.VarChar(20)
+  legalName      String             @map("legal_name") @db.VarChar(150)
+  /// ISO 3166-1 alpha-2 code (e.g. `CO`).
+  country        String             @db.Char(2)
+  city           String             @db.VarChar(100)
+  businessSector BusinessSector     @map("business_sector")
+  teamSize       TeamSize           @map("team_size")
+  productCount   ProductCount       @map("product_count")
+  contactPhone   String?            @map("contact_phone") @db.VarChar(20)
+  subdomain      String             @unique @db.VarChar(63)
   /// `tenant_` + subdomain with `-` replaced by `_`.
-  schemaName    String             @unique @map("schema_name") @db.VarChar(63)
+  schemaName     String             @unique @map("schema_name") @db.VarChar(63)
   /// Number of tenant migrations applied to `schemaName`.
-  schemaVersion Int                @default(0) @map("schema_version")
-  status        OrganizationStatus @default(ACTIVE)
-  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  schemaVersion  Int                @default(0) @map("schema_version")
+  status         OrganizationStatus @default(ACTIVE)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   subscriptions Subscription[]
   memberships   OrganizationMember[]
