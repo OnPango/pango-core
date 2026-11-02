@@ -23,7 +23,8 @@ pnpm test:e2e                       # vitest with vitest.config.e2e.ts (**/*.e2e
 pnpm prisma:generate                # generates both clients into src/generated/prisma/{control,tenant}
 pnpm db:migrate:control             # prisma migrate deploy for the public schema
 pnpm tenant:create --subdomain demo --tax-id 900000000-1 --legal-name "Demo SME SAS" \
-  --email owner@demo.pango.local --name "Demo Owner"
+  --country CO --city Bogotá --business-sector RETAIL --team-size SIZE_1_5 \
+  --product-count COUNT_1_100 --email owner@demo.pango.local --name "Demo Owner" --password "change-me-123"
 pnpm tenant:migrate                 # migrate deploy on every tenant + update schema_version
 ```
 
@@ -42,7 +43,19 @@ Prisma CLI calls always need `--config prisma/control.config.ts` or `--config pr
   - `prisma/tenant/` + `prisma/tenant.config.ts` (appends `?schema=$TENANT_SCHEMA` to `DIRECT_URL`; `SET search_path` doesn't work because Prisma qualifies tables)
 - Connections: `DATABASE_URL` = Supabase transaction pooler (6543) for app queries; `DIRECT_URL` = session pooler (5432) for the CLI, migrations and `scripts/`.
 - Runtime (`src/prisma/`, global `PrismaModule`): `ControlPrismaService` is the `public` client; `TenantPrismaService.client(schema)` returns a cached client per schema built with `new PrismaPg({ connectionString }, { schema })`. Callers must verify an ACTIVE membership for (account, organization) before requesting a tenant client. Always pass schema names through `assertTenantSchema` (`/^tenant_[a-z0-9_]{2,41}$/`) before interpolating them into SQL.
-- `scripts/tenants.ts` (run with tsx) implements provisioning: validate subdomain → `CREATE SCHEMA` → `migrate deploy` → creator user with the `Owner` role (`warehouseId` null) → organization + ACTIVE membership in `public`; drops the schema on failure. `organizations.schema_version` = number of tenant migrations applied.
+- Provisioning (`src/tenancy/provision-organization.ts`, used by `POST /auth/signup` and `scripts/tenants.ts create`) runs in one transaction: `CREATE SCHEMA` → tenant migration SQL with `SET LOCAL search_path`, recorded in `_prisma_migrations` with Prisma's checksums → owner account, organization and ACTIVE membership in `public` → owner user with the `Owner` role (`warehouseId` null). `tenant:migrate` still uses `prisma migrate deploy`. `organizations.schema_version` = number of tenant migrations applied.
+
+### Auth
+
+Details in `docs/auth.md`. Own auth (no Cognito): Argon2id passwords in `public.accounts`, HS256 access JWT (`sub` = account, `org` = organization) and rotating opaque refresh tokens (`public.refresh_tokens`, SHA-256 only). Only owners sign up (`POST /auth/signup` creates account + organization and emails a confirmation link; login is blocked until `accounts.email_verified_at` is set); employees join through invitations (`public.organization_invitations`, emailed with Resend), which also verify their email. The organization comes from the `X-Tenant` header or the host's subdomain of `APP_BASE_DOMAIN`. `AuthGuard` is global (`@Public()` opts out): it checks the token's organization equals the request's, reloads membership + tenant user on every request, and puts the session on `request.auth` (`@CurrentAuth()`); `@RequirePermissions(...)` only counts role assignments with no warehouse. Errors carry a stable `code` (`src/auth/auth-errors.ts`).
+
+### API documentation (Swagger)
+
+`@nestjs/swagger` serves Swagger UI at `/docs` and the OpenAPI JSON at `/docs-json` (`src/swagger/swagger.ts`; off in production unless `SWAGGER_ENABLED=true`). Every endpoint must be documented, with explicit decorators (no CLI plugin):
+
+- Controllers: `@ApiTags`, `@ApiOperation`, the success response (`@ApiOkResponse({ type })`, …) and either `@ApiSession({ permissions, validation, errors })` (guarded routes: bearer + `X-Tenant`, adds the guard's errors) or `@ApiPublic({ tenant, validation, errors })` from `src/swagger/api-docs.ts`. `errors` maps HTTP status → error `code`s; declare them there, not with separate `@ApiResponse` per status (Swagger keeps one per status).
+- Request DTOs: `@ApiProperty` / `@ApiPropertyOptional` on every field (examples, enums with `enumName`).
+- Responses: classes in the module's `responses.ts`, declared as the service's return type or `implements` its interface so they cannot drift.
 
 ### Migrations
 
