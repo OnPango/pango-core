@@ -11,7 +11,7 @@ Models carry `///` doc comments, which also show up in the generated clients.
 
 - **PostgreSQL 15+ on Supabase**, accessed directly from the NestJS backend through Prisma 7 and `@prisma/adapter-pg`. The Supabase REST API is not used.
 - **Schema per tenant**:
-  - `public`: control plane (organizations, accounts, organization_members, plans). One shared copy.
+  - `public`: control plane (organizations, accounts, organization_members, invitations, refresh tokens, plans). One shared copy.
   - `tenant_<slug>`: an identical copy of the tenant template per organization (e.g. `tenant_acme_co`). Tenant tables have no `organization_id`; the schema is the isolation boundary.
 - **Customization is always rows, never columns or tables.** Every tenant schema stays identical, so one migration updates all of them.
 - **Two Prisma setups**, each with its own schema, migrations folder, config and generated client (`src/generated/prisma/{control,tenant}`).
@@ -41,14 +41,21 @@ Models carry `///` doc comments, which also show up in the generated clients.
 | `plans` | Commercial plans and the limits they grant (`max_users`, `max_warehouses`). |
 | `organizations` | Customer organizations. `schema_name` points to their tenant schema; `schema_version` is the number of tenant migrations applied. Profile: optional `tax_id` (NIT, unique when present), `country` (ISO 3166-1 alpha-2), `city`, `business_sector`, `team_size` and `product_count` (range enums), optional `contact_phone`. |
 | `subscriptions` | Plan history per organization. |
-| `accounts` | Login identities (Cognito `sub` + email). |
+| `accounts` | Login identities: lowercase email, name, Argon2id `password_hash` (NULL = cannot log in yet) and `email_verified_at` (NULL = the owner has not confirmed the email; login is blocked). |
+| `account_tokens` | Single-use emailed tokens per account (`EMAIL_VERIFICATION`). Stores only the SHA-256 of the token. |
 | `organization_members` | Account ↔ organization (N:M), with `INVITED → ACTIVE → SUSPENDED` status and `joined_at`. |
+| `organization_invitations` | Invitations of an email to an organization, with the tenant role (and optional warehouse) to grant. Stores only the SHA-256 of the token. |
+| `refresh_tokens` | Refresh tokens of login sessions, bound to one organization. Stores only the SHA-256 of the token. |
 
 Rules:
 
 - `organizations.country` is checked against `^[A-Z]{2}$` (`organizations_country_chk`, hand-written in the migration).
 - `organizations.schema_name` = `tenant_` + subdomain with `-` replaced by `_`. Validate it against `^tenant_[a-z0-9_]{2,41}$` (`assertTenantSchema`) before interpolating it into SQL.
 - On every request, verify that an `ACTIVE` membership exists for (account, organization) **before** using the tenant schema.
+- One pending invitation per (organization, email): partial unique index `organization_invitations_pending_key` (hand-written). Invitation emails are lowercase (`organization_invitations_email_lowercase_chk`). The control diff emits `DROP INDEX` for the partial index — remove that line from new migrations.
+- `organization_invitations.role_id` / `warehouse_id` are logical references into the tenant schema (no foreign key).
+
+Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 ## Tenant template (`tenant_<slug>`)
 
@@ -209,14 +216,15 @@ Never edit a migration that has already been applied; add a new one.
 
 ### Provisioning an organization
 
-`pnpm tenant:create` (`scripts/tenants.ts`) runs:
+`POST /auth/signup` and `pnpm tenant:create` share `provisionOrganization` (`src/tenancy/provision-organization.ts`). In **one transaction** on `DIRECT_URL` it:
 
-1. Validate the subdomain and derive `tenant_<slug>`.
+1. Validates the subdomain and derives `tenant_<slug>`.
 2. `CREATE SCHEMA "tenant_<slug>"`.
-3. `prisma migrate deploy` against that schema.
-4. Create the creator's `user` with an Owner `role_assignment` (`warehouse_id` NULL).
-5. Insert the `organization` and its `ACTIVE` `organization_members` row in `public`.
-6. If anything fails, `DROP SCHEMA ... CASCADE`.
+3. Runs every `prisma/tenant/migrations/*/migration.sql` with `SET LOCAL search_path` and records them in the schema's `_prisma_migrations` table (same DDL and SHA-256 checksums as Prisma, so `pnpm tenant:migrate` keeps working).
+4. Inserts the owner `account` (or reuses an existing one), the `organization` and its `ACTIVE` `organization_members` row in `public`.
+5. Creates the owner's `user` with an Owner `role_assignment` (`warehouse_id` NULL).
+
+If anything fails the transaction rolls back and nothing is left behind. At runtime the migration files are read from `TENANT_MIGRATIONS_DIR` (default `prisma/tenant/migrations`), so the image must include them.
 
 ## Changes from the original design
 

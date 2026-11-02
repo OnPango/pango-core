@@ -57,9 +57,11 @@ pnpm prisma:generate        # generate both Prisma clients into src/generated/pr
 pnpm db:migrate:control     # apply the public schema migrations
 pnpm tenant:create --subdomain demo --tax-id 900000000-1 --legal-name "Demo SME SAS" \
   --country CO --city Bogotá --business-sector RETAIL --team-size SIZE_1_5 \
-  --product-count COUNT_1_100 --email owner@demo.pango.local --name "Demo Owner"
+  --product-count COUNT_1_100 --email owner@demo.pango.local --name "Demo Owner" --password "change-me-123"
 pnpm tenant:migrate         # apply tenant migrations to every organization
 ```
+
+API documentation: Swagger UI at `http://localhost:3000/docs` (OpenAPI JSON at `/docs-json`).
 
 <!-- Verificación: validar(Esteban)
 
