@@ -80,14 +80,13 @@ Creates the account, the organization and its tenant schema in one transaction (
 
 ### Session response
 
-Returned by login, refresh, invitation acceptance and the sign-up of a verified account (`GET /auth/me` returns the same without the tokens):
+Returned by login, refresh, invitation acceptance and the sign-up of a verified account, together with the refresh cookie (`GET /auth/me` returns the same without the token fields):
 
 ```json
 {
   "tokenType": "Bearer",
   "accessToken": "<JWT>",
   "expiresIn": 900,
-  "refreshToken": "<opaque>",
   "refreshTokenExpiresAt": "2026-11-30T12:00:00.000Z",
   "account": { "id": 1, "email": "ana@miempresa.co", "name": "Ana Pérez" },
   "organization": { "id": 3, "subdomain": "mi-empresa", "legalName": "Mi Empresa SAS" },
@@ -113,9 +112,11 @@ Returned by login, refresh, invitation acceptance and the sign-up of a verified 
 
 - **Access token**: HS256 JWT signed with `JWT_SECRET`; `sub` = account id, `org` = organization id; lifetime `JWT_ACCESS_TTL_SECONDS` (default 900). Sent as `Authorization: Bearer <token>`.
 - **Refresh token**: random opaque string; only its SHA-256 is stored (`public.refresh_tokens`); lifetime `REFRESH_TOKEN_TTL_DAYS` (default 30).
-  - `POST /auth/refresh` `{ "refreshToken" }` on the organization's subdomain rotates it: the old token is revoked and a new session is returned.
+  - It never appears in a response body: it is set as the cookie `pango_refresh_<subdomain>` with `HttpOnly; SameSite=Strict; Path=/auth` (and `Secure` in production, see `REFRESH_COOKIE_SECURE`), so frontend JavaScript (and an XSS) cannot read it. One cookie per organization, so sessions in two organizations on a shared API host do not overwrite each other.
+  - The frontend keeps the access token in memory (not `localStorage`) and sends requests with credentials (`fetch(..., { credentials: 'include' })`); CORS allows credentials for origins under `APP_BASE_DOMAIN`.
+  - `POST /auth/refresh` (no body) on the organization's subdomain reads the cookie and rotates it: the old token is revoked, a new session is returned and the cookie is replaced. On a rejected token the cookie is cleared.
   - Presenting a token that was already rotated or revoked is treated as theft and revokes every session of that account in the organization.
-  - `POST /auth/logout` `{ "refreshToken" }` revokes it (`204`).
+  - `POST /auth/logout` (no body) revokes the cookie's token and clears the cookie (`204`).
 
 ### Invitations
 
@@ -141,7 +142,8 @@ Auth errors have the shape `{ "statusCode", "code", "message" }`; the frontend s
 |---|---|---|
 | `JWT_SECRET` | — (required, ≥ 32 chars) | Signs access tokens. |
 | `JWT_ACCESS_TTL_SECONDS` | `900` | Access token lifetime. |
-| `REFRESH_TOKEN_TTL_DAYS` | `30` | Refresh token lifetime. |
+| `REFRESH_TOKEN_TTL_DAYS` | `30` | Refresh token (and cookie) lifetime. |
+| `REFRESH_COOKIE_SECURE` | `true` when `NODE_ENV=production`, else `false` | `Secure` flag of the refresh cookie (HTTPS only). |
 | `INVITATION_TTL_HOURS` | `72` | Invitation lifetime. |
 | `EMAIL_VERIFICATION_TTL_HOURS` | `24` | Email confirmation link lifetime. |
 | `APP_BASE_DOMAIN` | — | Base domain of organization subdomains; also enables CORS for them. |
