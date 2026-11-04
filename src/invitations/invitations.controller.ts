@@ -11,6 +11,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
@@ -21,10 +22,11 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentAuth, Public, RequirePermissions } from '../auth/decorators.js';
 import { SessionResponseDto } from '../auth/responses.js';
+import { SessionCookies } from '../auth/session-cookies.js';
 import {
   ApiPublic,
   ApiSession,
@@ -45,6 +47,7 @@ export class InvitationsController {
   constructor(
     private readonly invitations: InvitationsService,
     private readonly tenantResolver: TenantResolver,
+    private readonly cookies: SessionCookies,
   ) {}
 
   @Post()
@@ -130,7 +133,8 @@ export class InvitationsController {
     summary: 'Accept an invitation and log in',
     description:
       "Call it on the invitation's organization. A new email needs `name` and a new password; " +
-      'an existing account sends its current password. Accepting also confirms the email.',
+      'an existing account sends its current password. Accepting also confirms the email. ' +
+      'The refresh token is set as the HttpOnly cookie `pango_refresh_<subdomain>`.',
   })
   @ApiCreatedResponse({ type: SessionResponseDto })
   @ApiPublic({
@@ -147,7 +151,15 @@ export class InvitationsController {
       [HttpStatus.NOT_FOUND]: ['INVITATION_INVALID'],
     },
   })
-  accept(@Req() request: Request, @Body() dto: AcceptInvitationDto) {
-    return this.invitations.accept(this.tenantResolver.resolve(request), dto);
+  async accept(
+    @Req() request: Request,
+    @Body() dto: AcceptInvitationDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const session = await this.invitations.accept(
+      this.tenantResolver.resolve(request),
+      dto,
+    );
+    return this.cookies.issue(response, session);
   }
 }

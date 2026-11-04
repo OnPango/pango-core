@@ -4,11 +4,14 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  HttpException,
   Post,
   Req,
+  Res,
 } from '@nestjs/common';
 import {
   ApiAcceptedResponse,
+  ApiCookieAuth,
   ApiCreatedResponse,
   ApiExtraModels,
   ApiNoContentResponse,
@@ -17,15 +20,16 @@ import {
   ApiTags,
   getSchemaPath,
 } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { ApiPublic, ApiSession } from '../swagger/api-docs.js';
+import { REFRESH_COOKIE_AUTH } from '../swagger/swagger.js';
 import { TenantResolver } from '../tenancy/tenant-resolver.service.js';
 import { type AuthContext, toSessionProfile } from './auth-context.js';
 import { AuthService } from './auth.service.js';
+import { authErrors } from './auth-errors.js';
 import { CurrentAuth, Public } from './decorators.js';
 import {
   LoginDto,
-  RefreshTokenDto,
   ResendVerificationDto,
   SignupDto,
   VerifyEmailDto,
@@ -37,6 +41,11 @@ import {
   VerificationRequiredResponseDto,
   VerifyEmailResponseDto,
 } from './responses.js';
+import { SessionCookies } from './session-cookies.js';
+
+const COOKIE_NOTE =
+  'The refresh token is set as the HttpOnly cookie `pango_refresh_<subdomain>` (path `/auth`) ' +
+  'and is not in the body; send requests with credentials.';
 
 // Errors of every endpoint that opens a session (AccessService.loadContext).
 const SESSION_FORBIDDEN = [
@@ -55,6 +64,7 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly tenantResolver: TenantResolver,
     private readonly verification: EmailVerificationService,
+    private readonly cookies: SessionCookies,
   ) {}
 
   @Public()
@@ -65,7 +75,7 @@ export class AuthController {
       'The only open registration. Provisions the organization and its tenant schema. ' +
       'A new account gets a confirmation email and no session (`verificationRequired`); ' +
       'an existing account must send its current password, and is logged in if its email is already verified. ' +
-      'Call it from the main domain (no tenant needed).',
+      `Call it from the main domain (no tenant needed). ${COOKIE_NOTE}`,
   })
   @ApiExtraModels(SessionResponseDto, VerificationRequiredResponseDto)
   @ApiCreatedResponse({
@@ -86,8 +96,14 @@ export class AuthController {
       [HttpStatus.CONFLICT]: ['EMAIL_TAKEN', 'SUBDOMAIN_TAKEN', 'TAX_ID_TAKEN'],
     },
   })
-  signup(@Body() dto: SignupDto) {
-    return this.auth.signup(dto);
+  async signup(
+    @Body() dto: SignupDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.auth.signup(dto);
+    return 'accessToken' in result
+      ? this.cookies.issue(response, result)
+      : result;
   }
 
   @Public()
@@ -135,7 +151,8 @@ export class AuthController {
     summary: "Log in to the request's organization",
     description:
       'Valid credentials of an account that does not belong to the organization are rejected with `NOT_A_MEMBER`. ' +
-      'Returns the tokens and the user’s roles and permissions in that organization.',
+      'Returns the access token and the user’s roles and permissions in that organization. ' +
+      COOKIE_NOTE,
   })
   @ApiOkResponse({ type: SessionResponseDto })
   @ApiPublic({
@@ -148,8 +165,16 @@ export class AuthController {
       [HttpStatus.NOT_FOUND]: ['ORGANIZATION_NOT_FOUND'],
     },
   })
-  login(@Req() request: Request, @Body() dto: LoginDto) {
-    return this.auth.login(this.tenantResolver.resolve(request), dto);
+  async login(
+    @Req() request: Request,
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const session = await this.auth.login(
+      this.tenantResolver.resolve(request),
+      dto,
+    );
+    return this.cookies.issue(response, session);
   }
 
   @Public()
@@ -158,24 +183,38 @@ export class AuthController {
   @ApiOperation({
     summary: 'Rotate the refresh token',
     description:
-      'Revokes the given refresh token and returns a new session. Reusing an already rotated token ' +
-      'is treated as theft and ends every session of the account in the organization.',
+      'Reads the refresh cookie of the request’s organization, revokes it and returns a new session ' +
+      '(with a new cookie). Reusing an already rotated token is treated as theft and ends every ' +
+      'session of the account in the organization. On failure the cookie is cleared.',
   })
+  @ApiCookieAuth(REFRESH_COOKIE_AUTH)
   @ApiOkResponse({ type: SessionResponseDto })
   @ApiPublic({
     tenant: true,
-    validation: true,
     errors: {
       [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'],
       [HttpStatus.UNAUTHORIZED]: ['INVALID_REFRESH_TOKEN'],
       [HttpStatus.FORBIDDEN]: ['TENANT_MISMATCH', ...SESSION_FORBIDDEN],
     },
   })
-  refresh(@Req() request: Request, @Body() dto: RefreshTokenDto) {
-    return this.auth.refresh(
-      this.tenantResolver.resolve(request),
-      dto.refreshToken,
-    );
+  async refresh(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const subdomain = this.tenantResolver.resolve(request);
+    if (!subdomain) throw authErrors.tenantRequired();
+    const refreshToken = this.cookies.read(request, subdomain);
+    if (!refreshToken) throw authErrors.invalidRefreshToken();
+    try {
+      const session = await this.auth.refresh(subdomain, refreshToken);
+      return this.cookies.issue(response, session);
+    } catch (error) {
+      // A rejected token is useless; drop it so the client stops sending it.
+      if (error instanceof HttpException && error.getStatus() < 500) {
+        this.cookies.clear(response, subdomain);
+      }
+      throw error;
+    }
   }
 
   @Public()
@@ -184,12 +223,24 @@ export class AuthController {
   @ApiOperation({
     summary: 'Log out',
     description:
-      'Revokes the refresh token. The access token stays valid until it expires.',
+      'Revokes the refresh cookie of the request’s organization and clears it. ' +
+      'The access token stays valid until it expires; the frontend should discard it.',
   })
-  @ApiNoContentResponse({ description: 'Logged out (also for unknown tokens)' })
-  @ApiPublic({ validation: true })
-  logout(@Body() dto: RefreshTokenDto) {
-    return this.auth.logout(dto.refreshToken);
+  @ApiCookieAuth(REFRESH_COOKIE_AUTH)
+  @ApiNoContentResponse({ description: 'Logged out (also without a cookie)' })
+  @ApiPublic({
+    tenant: true,
+    errors: { [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'] },
+  })
+  async logout(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<void> {
+    const subdomain = this.tenantResolver.resolve(request);
+    if (!subdomain) throw authErrors.tenantRequired();
+    const refreshToken = this.cookies.read(request, subdomain);
+    if (refreshToken) await this.auth.logout(refreshToken);
+    this.cookies.clear(response, subdomain);
   }
 
   @Get('me')
