@@ -6,7 +6,7 @@ import {
   ApiSecurity,
   getSchemaPath,
 } from '@nestjs/swagger';
-import { BEARER_AUTH, TENANT_AUTH } from './swagger.js';
+import { ACCESS_COOKIE_AUTH, BEARER_AUTH, TENANT_AUTH } from './swagger.js';
 
 /** Body of every application error (see `apiError`). */
 export class ApiErrorDto {
@@ -116,6 +116,7 @@ export function ApiSession(
     [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'],
     [HttpStatus.UNAUTHORIZED]: ['UNAUTHENTICATED'],
     [HttpStatus.FORBIDDEN]: [
+      'CSRF_REJECTED',
       'TENANT_MISMATCH',
       'NOT_A_MEMBER',
       'MEMBERSHIP_SUSPENDED',
@@ -128,7 +129,9 @@ export function ApiSession(
   };
   return applyDecorators(
     ApiExtraModels(ApiErrorDto, ValidationErrorDto),
-    // One requirement with both schemes = both are sent (separate ones mean either).
+    // Schemes in one requirement are all sent; separate requirements are alternatives:
+    // (access cookie + tenant) or (bearer + tenant).
+    ApiSecurity({ [ACCESS_COOKIE_AUTH]: [], [TENANT_AUTH]: [] }),
     ApiSecurity({ [BEARER_AUTH]: [], [TENANT_AUTH]: [] }),
     ...errorResponses({
       validation: options.validation,

@@ -134,7 +134,7 @@ export class InvitationsController {
     description:
       "Call it on the invitation's organization. A new email needs `name` and a new password; " +
       'an existing account sends its current password. Accepting also confirms the email. ' +
-      'The refresh token is set as the HttpOnly cookie `pango_refresh_<subdomain>`.',
+      'Tokens are set as the HttpOnly cookies `pango_access_<subdomain>` and `pango_refresh_<subdomain>`.',
   })
   @ApiCreatedResponse({ type: SessionResponseDto })
   @ApiPublic({
