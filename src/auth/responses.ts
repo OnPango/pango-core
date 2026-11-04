@@ -2,10 +2,8 @@
 // flags any drift between the documentation and what the API returns.
 import { ApiProperty } from '@nestjs/swagger';
 import type { RoleGrant, SessionProfile } from './auth-context.js';
-import type {
-  SessionResponse,
-  VerificationRequiredResponse,
-} from './auth.service.js';
+import type { VerificationRequiredResponse } from './auth.service.js';
+import type { SessionBody } from './session-cookies.js';
 
 export class AccountDto {
   @ApiProperty({ example: 1 })
@@ -88,7 +86,7 @@ export class SessionProfileDto implements SessionProfile {
 
 export class SessionResponseDto
   extends SessionProfileDto
-  implements SessionResponse
+  implements SessionBody
 {
   @ApiProperty({ enum: ['Bearer'], example: 'Bearer' })
   tokenType: 'Bearer';
@@ -103,11 +101,10 @@ export class SessionResponseDto
   expiresIn: number;
 
   @ApiProperty({
-    description: 'Opaque, single-use; rotate it with POST /auth/refresh',
+    type: String,
+    format: 'date-time',
+    description: 'Expiry of the refresh cookie',
   })
-  refreshToken: string;
-
-  @ApiProperty({ type: String, format: 'date-time' })
   refreshTokenExpiresAt: Date;
 }
 

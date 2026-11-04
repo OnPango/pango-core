@@ -169,11 +169,3 @@ export class ResendVerificationDto {
   @MaxLength(150)
   email: string;
 }
-
-export class RefreshTokenDto {
-  @ApiProperty({ description: 'Refresh token from the last session response' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(200)
-  refreshToken: string;
-}

@@ -5,6 +5,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
 import { EmailVerificationService } from './email-verification.service.js';
+import { SessionCookies } from './session-cookies.js';
 import { TokenService } from './token.service.js';
 
 @Module({
@@ -13,9 +14,10 @@ import { TokenService } from './token.service.js';
     AccessService,
     AuthService,
     EmailVerificationService,
+    SessionCookies,
     TokenService,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [AccessService, AuthService],
+  exports: [AccessService, AuthService, SessionCookies],
 })
 export class AuthModule {}

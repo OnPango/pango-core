@@ -1,4 +1,5 @@
 import { ValidationPipe } from '@nestjs/common';
+import cookieParser from 'cookie-parser';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { setupSwagger } from './swagger/swagger.js';
@@ -16,6 +17,7 @@ function isAllowedOrigin(origin: string, baseDomain: string): boolean {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -31,6 +33,8 @@ async function bootstrap() {
         callback: (error: Error | null, allow?: boolean) => void,
       ) => callback(null, !origin || isAllowedOrigin(origin, baseDomain)),
       allowedHeaders: ['Authorization', 'Content-Type', TENANT_HEADER],
+      // The refresh token is an HttpOnly cookie; requests must carry credentials.
+      credentials: true,
     });
   }
   setupSwagger(app);
