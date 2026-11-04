@@ -12,6 +12,7 @@ import {
 } from './auth-context.js';
 import { authErrors } from './auth-errors.js';
 import { IS_PUBLIC_KEY, PERMISSIONS_KEY } from './decorators.js';
+import { SessionCookies } from './session-cookies.js';
 import { type AccessClaims, TokenService } from './token.service.js';
 
 function bearerToken(header: string | undefined): string | null {
@@ -21,6 +22,8 @@ function bearerToken(header: string | undefined): string | null {
 }
 
 // Global guard: every route needs a valid access token unless marked @Public().
+// The token comes from the organization's HttpOnly access cookie, or else from an
+// `Authorization: Bearer` header (Swagger, scripts; not exposed to CSRF).
 // The token's organization must be the one the request is addressed to, and the
 // membership is re-checked on every request so suspensions apply immediately.
 @Injectable()
@@ -30,6 +33,7 @@ export class AuthGuard implements CanActivate {
     private readonly tokens: TokenService,
     private readonly access: AccessService,
     private readonly tenantResolver: TenantResolver,
+    private readonly cookies: SessionCookies,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -39,7 +43,12 @@ export class AuthGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const token = bearerToken(request.headers.authorization);
+    const subdomain = this.tenantResolver.resolve(request);
+    if (!subdomain) throw authErrors.tenantRequired();
+
+    const token =
+      this.cookies.readAccess(request, subdomain) ??
+      bearerToken(request.headers.authorization);
     if (!token) throw authErrors.unauthenticated();
 
     let claims: AccessClaims;
@@ -48,9 +57,6 @@ export class AuthGuard implements CanActivate {
     } catch {
       throw authErrors.unauthenticated();
     }
-
-    const subdomain = this.tenantResolver.resolve(request);
-    if (!subdomain) throw authErrors.tenantRequired();
 
     const auth = await this.access.loadContext(
       claims.accountId,

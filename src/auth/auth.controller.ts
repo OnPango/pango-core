@@ -44,8 +44,8 @@ import {
 import { SessionCookies } from './session-cookies.js';
 
 const COOKIE_NOTE =
-  'The refresh token is set as the HttpOnly cookie `pango_refresh_<subdomain>` (path `/auth`) ' +
-  'and is not in the body; send requests with credentials.';
+  'Tokens are set as the HttpOnly cookies `pango_access_<subdomain>` (path `/`) and ' +
+  '`pango_refresh_<subdomain>` (path `/auth`) and never appear in the body; send requests with credentials.';
 
 // Errors of every endpoint that opens a session (AccessService.loadContext).
 const SESSION_FORBIDDEN = [
@@ -151,7 +151,7 @@ export class AuthController {
     summary: "Log in to the request's organization",
     description:
       'Valid credentials of an account that does not belong to the organization are rejected with `NOT_A_MEMBER`. ' +
-      'Returns the access token and the user’s roles and permissions in that organization. ' +
+      'Returns the user’s roles and permissions in that organization. ' +
       COOKIE_NOTE,
   })
   @ApiOkResponse({ type: SessionResponseDto })
@@ -184,8 +184,8 @@ export class AuthController {
     summary: 'Rotate the refresh token',
     description:
       'Reads the refresh cookie of the request’s organization, revokes it and returns a new session ' +
-      '(with a new cookie). Reusing an already rotated token is treated as theft and ends every ' +
-      'session of the account in the organization. On failure the cookie is cleared.',
+      '(with new cookies). Reusing an already rotated token is treated as theft and ends every ' +
+      'session of the account in the organization. On failure both cookies are cleared.',
   })
   @ApiCookieAuth(REFRESH_COOKIE_AUTH)
   @ApiOkResponse({ type: SessionResponseDto })
@@ -194,7 +194,11 @@ export class AuthController {
     errors: {
       [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'],
       [HttpStatus.UNAUTHORIZED]: ['INVALID_REFRESH_TOKEN'],
-      [HttpStatus.FORBIDDEN]: ['TENANT_MISMATCH', ...SESSION_FORBIDDEN],
+      [HttpStatus.FORBIDDEN]: [
+        'CSRF_REJECTED',
+        'TENANT_MISMATCH',
+        ...SESSION_FORBIDDEN,
+      ],
     },
   })
   async refresh(
@@ -203,7 +207,7 @@ export class AuthController {
   ) {
     const subdomain = this.tenantResolver.resolve(request);
     if (!subdomain) throw authErrors.tenantRequired();
-    const refreshToken = this.cookies.read(request, subdomain);
+    const refreshToken = this.cookies.readRefresh(request, subdomain);
     if (!refreshToken) throw authErrors.invalidRefreshToken();
     try {
       const session = await this.auth.refresh(subdomain, refreshToken);
@@ -223,14 +227,16 @@ export class AuthController {
   @ApiOperation({
     summary: 'Log out',
     description:
-      'Revokes the refresh cookie of the request’s organization and clears it. ' +
-      'The access token stays valid until it expires; the frontend should discard it.',
+      'Revokes the refresh token of the request’s organization and clears both cookies.',
   })
   @ApiCookieAuth(REFRESH_COOKIE_AUTH)
   @ApiNoContentResponse({ description: 'Logged out (also without a cookie)' })
   @ApiPublic({
     tenant: true,
-    errors: { [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'] },
+    errors: {
+      [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'],
+      [HttpStatus.FORBIDDEN]: ['CSRF_REJECTED'],
+    },
   })
   async logout(
     @Req() request: Request,
@@ -238,7 +244,7 @@ export class AuthController {
   ): Promise<void> {
     const subdomain = this.tenantResolver.resolve(request);
     if (!subdomain) throw authErrors.tenantRequired();
-    const refreshToken = this.cookies.read(request, subdomain);
+    const refreshToken = this.cookies.readRefresh(request, subdomain);
     if (refreshToken) await this.auth.logout(refreshToken);
     this.cookies.clear(response, subdomain);
   }

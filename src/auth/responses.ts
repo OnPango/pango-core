@@ -88,22 +88,16 @@ export class SessionResponseDto
   extends SessionProfileDto
   implements SessionBody
 {
-  @ApiProperty({ enum: ['Bearer'], example: 'Bearer' })
-  tokenType: 'Bearer';
-
-  @ApiProperty({ description: 'HS256 JWT; send as `Authorization: Bearer`' })
-  accessToken: string;
-
   @ApiProperty({
     example: 900,
-    description: 'Access token lifetime in seconds',
+    description: 'Access cookie lifetime in seconds; refresh before it ends',
   })
   expiresIn: number;
 
   @ApiProperty({
     type: String,
     format: 'date-time',
-    description: 'Expiry of the refresh cookie',
+    description: 'Expiry of the refresh cookie; log in again after it',
   })
   refreshTokenExpiresAt: Date;
 }

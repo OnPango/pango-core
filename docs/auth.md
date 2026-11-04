@@ -80,12 +80,10 @@ Creates the account, the organization and its tenant schema in one transaction (
 
 ### Session response
 
-Returned by login, refresh, invitation acceptance and the sign-up of a verified account, together with the refresh cookie (`GET /auth/me` returns the same without the token fields):
+Returned by login, refresh, invitation acceptance and the sign-up of a verified account, together with the two session cookies (`GET /auth/me` returns the same without `expiresIn` / `refreshTokenExpiresAt`). The body never contains a token:
 
 ```json
 {
-  "tokenType": "Bearer",
-  "accessToken": "<JWT>",
   "expiresIn": 900,
   "refreshTokenExpiresAt": "2026-11-30T12:00:00.000Z",
   "account": { "id": 1, "email": "ana@miempresa.co", "name": "Ana Pérez" },
@@ -108,15 +106,29 @@ Returned by login, refresh, invitation acceptance and the sign-up of a verified 
 
 `warehouse: null` means the role applies to every warehouse.
 
-### Tokens
+### Tokens and cookies
 
-- **Access token**: HS256 JWT signed with `JWT_SECRET`; `sub` = account id, `org` = organization id; lifetime `JWT_ACCESS_TTL_SECONDS` (default 900). Sent as `Authorization: Bearer <token>`.
-- **Refresh token**: random opaque string; only its SHA-256 is stored (`public.refresh_tokens`); lifetime `REFRESH_TOKEN_TTL_DAYS` (default 30).
-  - It never appears in a response body: it is set as the cookie `pango_refresh_<subdomain>` with `HttpOnly; SameSite=Strict; Path=/auth` (and `Secure` in production, see `REFRESH_COOKIE_SECURE`), so frontend JavaScript (and an XSS) cannot read it. One cookie per organization, so sessions in two organizations on a shared API host do not overwrite each other.
-  - The frontend keeps the access token in memory (not `localStorage`) and sends requests with credentials (`fetch(..., { credentials: 'include' })`); CORS allows credentials for origins under `APP_BASE_DOMAIN`.
-  - `POST /auth/refresh` (no body) on the organization's subdomain reads the cookie and rotates it: the old token is revoked, a new session is returned and the cookie is replaced. On a rejected token the cookie is cleared.
-  - Presenting a token that was already rotated or revoked is treated as theft and revokes every session of that account in the organization.
-  - `POST /auth/logout` (no body) revokes the cookie's token and clears the cookie (`204`).
+The frontend never handles a token: both live in HttpOnly cookies set by the API.
+
+| Cookie | Content | Path | Lifetime |
+|---|---|---|---|
+| `pango_access_<subdomain>` | Access token: HS256 JWT signed with `JWT_SECRET`; `sub` = account id, `org` = organization id | `/` | `JWT_ACCESS_TTL_SECONDS` (default 900) |
+| `pango_refresh_<subdomain>` | Refresh token: random opaque string; only its SHA-256 is stored (`public.refresh_tokens`) | `/auth` (refresh and logout only) | `REFRESH_TOKEN_TTL_DAYS` (default 30) |
+
+- Flags: `HttpOnly; SameSite=Lax`, `Secure` (`COOKIE_SECURE`, default on in production) and `Domain=COOKIE_DOMAIN` (`.onpango.com` in production; unset in development, so cookies are host-only).
+- One pair per organization: with `Domain=.onpango.com` every subdomain receives every cookie, and sessions in two organizations must not overwrite each other. `AuthGuard` only reads the cookie of the request's organization.
+- The frontend sends every request with credentials (`fetch(..., { credentials: 'include' })`); CORS allows credentials for origins under `APP_BASE_DOMAIN`. It schedules `POST /auth/refresh` before `expiresIn` runs out, and calls it on page load to restore the session.
+- `Authorization: Bearer <access token>` is still accepted for non-browser clients (scripts, tests); the access cookie wins when both are present.
+- `POST /auth/refresh` (no body) on the organization's subdomain reads the refresh cookie and rotates it: the old token is revoked and both cookies are replaced. On a rejected token both cookies are cleared.
+- Presenting a refresh token that was already rotated or revoked is treated as theft and revokes every session of that account in the organization.
+- `POST /auth/logout` (no body) revokes the refresh token and clears both cookies (`204`).
+
+### CSRF
+
+Cookie sessions are sent by the browser automatically, so cross-site request forgery is handled in two layers:
+
+1. `SameSite=Lax`: browsers do not attach the cookies to cross-site POST/PUT/PATCH/DELETE requests or subresource loads. They are still sent on top-level GET navigations, so **GET routes must never change state**.
+2. `CsrfGuard` (global, runs before `AuthGuard`): an unsafe request that carries a `pango_*` cookie must have an `Origin` under `APP_BASE_DOMAIN`; otherwise `403 CSRF_REJECTED`. This also covers other same-site hosts that `Lax` lets through. Requests without `Origin` (non-browser clients) pass.
 
 ### Invitations
 
@@ -143,10 +155,11 @@ Auth errors have the shape `{ "statusCode", "code", "message" }`; the frontend s
 | `JWT_SECRET` | — (required, ≥ 32 chars) | Signs access tokens. |
 | `JWT_ACCESS_TTL_SECONDS` | `900` | Access token lifetime. |
 | `REFRESH_TOKEN_TTL_DAYS` | `30` | Refresh token (and cookie) lifetime. |
-| `REFRESH_COOKIE_SECURE` | `true` when `NODE_ENV=production`, else `false` | `Secure` flag of the refresh cookie (HTTPS only). |
+| `COOKIE_SECURE` | `true` when `NODE_ENV=production`, else `false` | `Secure` flag of the session cookies (HTTPS only). |
+| `COOKIE_DOMAIN` | — (host-only) | `Domain` of the session cookies; `.onpango.com` in production. |
 | `INVITATION_TTL_HOURS` | `72` | Invitation lifetime. |
 | `EMAIL_VERIFICATION_TTL_HOURS` | `24` | Email confirmation link lifetime. |
-| `APP_BASE_DOMAIN` | — | Base domain of organization subdomains; also enables CORS for them. |
+| `APP_BASE_DOMAIN` | — | Base domain of organization subdomains; also enables CORS (with credentials) for them and is the allowed origin of `CsrfGuard`. |
 | `WEB_APP_URL_TEMPLATE` | `http://{subdomain}.localhost:5173` | Frontend URL used in invitation and confirmation links. |
 | `RESEND_API_KEY` | — | Resend API key. Without it emails are only logged; required when `NODE_ENV=production`. |
 | `MAIL_FROM` | `Pango <onboarding@resend.dev>` | Sender (must be a domain verified in Resend). |
