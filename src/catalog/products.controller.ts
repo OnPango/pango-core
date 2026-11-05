@@ -80,7 +80,7 @@ export class ProductsController {
     permissions: ['product.manage'],
     validation: true,
     errors: {
-      [HttpStatus.BAD_REQUEST]: ['CATEGORY_INVALID', 'UNIT_OF_MEASURE_INVALID'],
+      [HttpStatus.BAD_REQUEST]: ['CATEGORY_INVALID', 'STOCK_UNIT_INVALID'],
       [HttpStatus.CONFLICT]: ['SKU_TAKEN'],
     },
   })
@@ -103,7 +103,7 @@ export class ProductsController {
     permissions: ['product.manage'],
     validation: true,
     errors: {
-      [HttpStatus.BAD_REQUEST]: ['CATEGORY_INVALID', 'UNIT_OF_MEASURE_INVALID'],
+      [HttpStatus.BAD_REQUEST]: ['CATEGORY_INVALID', 'STOCK_UNIT_INVALID'],
       [HttpStatus.NOT_FOUND]: ['PRODUCT_NOT_FOUND'],
       [HttpStatus.CONFLICT]: ['SKU_TAKEN', 'SKU_LOCKED', 'TRACKS_LOTS_LOCKED'],
     },

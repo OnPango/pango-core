@@ -76,8 +76,8 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 | Table | Purpose |
 |---|---|
 | `categories` | Category (product family) tree (`parent_id`). Names are unique among siblings (case-insensitive, enforced by the application). Inactive categories keep their products but cannot receive new ones. |
-| `units_of_measure` | Units for products and location capacity. |
-| `products` | Products (SKU, category, unit, optional physical data `length_cm`/`width_cm`/`height_cm`/`weight_kg`/`volume_l`, lot tracking, cached average cost). Never deleted, only deactivated. |
+| `units_of_measure` | Units products are counted in (`products.stock_unit_id`) and location capacity is expressed in (`locations.capacity_unit_id`). |
+| `products` | Products (SKU, category, `stock_unit_id` = unit every quantity of the product is counted in, optional physical data `length_cm`/`width_cm`/`height_cm`/`weight_kg`/`volume_l`, lot tracking, cached average cost). Never deleted, only deactivated. |
 | `suppliers`, `supplier_products` | Suppliers and the products they sell, with price, lead time and one preferred supplier per product. |
 | `custom_attributes`, `attribute_options`, `attribute_values` | Organization-defined product fields (EAV), optionally scoped to a category. `LIST` attributes take their values from `attribute_options`. |
 

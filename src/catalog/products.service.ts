@@ -19,7 +19,7 @@ type Tx = Prisma.TransactionClient;
 
 const productInclude = {
   category: { select: { id: true, name: true } },
-  unitOfMeasure: { select: { id: true, code: true, name: true } },
+  stockUnit: { select: { id: true, code: true, name: true } },
 } satisfies Prisma.ProductInclude;
 
 type ProductWithRefs = Prisma.ProductGetPayload<{
@@ -46,7 +46,7 @@ function toDto(product: ProductWithRefs): ProductFields {
     name: product.name,
     description: product.description,
     category: product.category,
-    unitOfMeasure: product.unitOfMeasure,
+    stockUnit: product.stockUnit,
     lengthCm: toNumber(product.lengthCm),
     widthCm: toNumber(product.widthCm),
     heightCm: toNumber(product.heightCm),
@@ -162,7 +162,7 @@ export class ProductsService {
   async create(auth: AuthContext, dto: CreateProductDto): Promise<ProductDto> {
     const tenant = this.tenant(auth);
     await this.assertCategoryUsable(tenant, dto.categoryId);
-    await this.assertUnitExists(tenant, dto.unitOfMeasureId);
+    await this.assertStockUnitExists(tenant, dto.stockUnitId);
     await this.assertSkuFree(tenant, dto.sku);
 
     try {
@@ -172,7 +172,7 @@ export class ProductsService {
           name: dto.name,
           description: dto.description || null,
           categoryId: dto.categoryId,
-          unitOfMeasureId: dto.unitOfMeasureId,
+          stockUnitId: dto.stockUnitId,
           lengthCm: dto.lengthCm ?? null,
           widthCm: dto.widthCm ?? null,
           heightCm: dto.heightCm ?? null,
@@ -215,9 +215,9 @@ export class ProductsService {
       await this.assertCategoryUsable(tenant, dto.categoryId);
       data.categoryId = dto.categoryId;
     }
-    if (dto.unitOfMeasureId !== undefined) {
-      await this.assertUnitExists(tenant, dto.unitOfMeasureId);
-      data.unitOfMeasureId = dto.unitOfMeasureId;
+    if (dto.stockUnitId !== undefined) {
+      await this.assertStockUnitExists(tenant, dto.stockUnitId);
+      data.stockUnitId = dto.stockUnitId;
     }
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) {
@@ -277,10 +277,10 @@ export class ProductsService {
     if (!category?.isActive) throw catalogErrors.categoryInvalid();
   }
 
-  private async assertUnitExists(tenant: Tx, unitId: number) {
+  private async assertStockUnitExists(tenant: Tx, unitId: number) {
     const unit = await tenant.unitOfMeasure.findUnique({
       where: { id: unitId },
     });
-    if (!unit) throw catalogErrors.unitInvalid();
+    if (!unit) throw catalogErrors.stockUnitInvalid();
   }
 }

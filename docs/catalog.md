@@ -24,7 +24,7 @@ Product body:
   "name": "Hex bolt 1/4\"",
   "description": null,
   "categoryId": 3,
-  "unitOfMeasureId": 1,
+  "stockUnitId": 1,
   "lengthCm": 5,
   "widthCm": 2,
   "heightCm": 1,
@@ -34,14 +34,14 @@ Product body:
 }
 ```
 
-Required: `sku`, `name`, `categoryId`, `unitOfMeasureId`. Physical data is optional and non-negative; `null` clears it on `PATCH`.
+Required: `sku`, `name`, `categoryId`, `stockUnitId` (the unit every quantity of the product is counted in: stock, movements, requests, reorder point; see `GET /units-of-measure`). It is not related to the physical data, which always uses cm, kg and litres. Physical data is optional and non-negative; `null` clears it on `PATCH`.
 
 ## Rules
 
 - The code (`sku`) is unique in the organization, ignoring case (`409 SKU_TAKEN`).
 - Once the product has movements, its code (`409 SKU_LOCKED`) and lot tracking (`409 TRACKS_LOTS_LOCKED`, also once it has lots) cannot change.
 - Products and categories are never deleted, only deactivated.
-- A product needs an active category (`400 CATEGORY_INVALID`) and an existing unit (`400 UNIT_OF_MEASURE_INVALID`).
+- A product needs an active category (`400 CATEGORY_INVALID`) and an existing stock unit (`400 STOCK_UNIT_INVALID`).
 - Category names are unique among siblings, ignoring case (`409 CATEGORY_NAME_TAKEN`). A category cannot move under itself or a descendant (`400 CATEGORY_CYCLE`), needs an active parent to be active (`400 CATEGORY_PARENT_INVALID`) and cannot be deactivated while it has active subcategories (`409 CATEGORY_HAS_ACTIVE_CHILDREN`). Products of an inactive category keep it.
 
 ## Not done yet

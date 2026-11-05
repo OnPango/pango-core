@@ -112,10 +112,15 @@ export class CreateProductDto {
   @Min(1)
   categoryId: number;
 
-  @ApiProperty({ example: 1, description: 'See `GET /units-of-measure`' })
+  @ApiProperty({
+    example: 1,
+    description:
+      'Unit every quantity of the product is counted in (stock, movements, requests). ' +
+      'See `GET /units-of-measure`',
+  })
   @IsInt()
   @Min(1)
-  unitOfMeasureId: number;
+  stockUnitId: number;
 
   @measure(5, 'Length in centimetres')
   @IsOptional()

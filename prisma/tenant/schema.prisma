@@ -330,7 +330,8 @@ model Product {
   id              Int      @id @default(autoincrement())
   sku             String   @unique @db.VarChar(40)
   categoryId      Int      @map("category_id")
-  unitOfMeasureId Int      @map("unit_of_measure_id")
+  /// Unit every quantity of the product is counted in (stock, movements, requests).
+  stockUnitId     Int      @map("stock_unit_id")
   name            String   @db.VarChar(150)
   description     String?
   /// Physical data, optional; non-negative (CHECK in the `catalog_fields` migration).
@@ -348,7 +349,7 @@ model Product {
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   category          Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  unitOfMeasure     UnitOfMeasure      @relation(fields: [unitOfMeasureId], references: [id], onDelete: Restrict)
+  stockUnit         UnitOfMeasure      @relation(fields: [stockUnitId], references: [id], onDelete: Restrict)
   supplierProducts  SupplierProduct[]
   attributeValues   AttributeValue[]
   warehouses        ProductWarehouse[]
@@ -357,7 +358,7 @@ model Product {
   stockRequestLines StockRequestLine[]
 
   @@index([categoryId])
-  @@index([unitOfMeasureId])
+  @@index([stockUnitId])
   @@map("products")
 }
 

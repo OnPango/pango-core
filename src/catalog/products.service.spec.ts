@@ -16,7 +16,7 @@ function product(overrides: Record<string, unknown> = {}) {
     name: 'Bolt',
     description: null,
     categoryId: 3,
-    unitOfMeasureId: 1,
+    stockUnitId: 1,
     lengthCm: new Prisma.Decimal('5.5'),
     widthCm: null,
     heightCm: null,
@@ -28,7 +28,7 @@ function product(overrides: Record<string, unknown> = {}) {
     createdAt: new Date('2026-11-01'),
     updatedAt: new Date('2026-11-01'),
     category: { id: 3, name: 'Hardware' },
-    unitOfMeasure: { id: 1, code: 'EA', name: 'Each' },
+    stockUnit: { id: 1, code: 'EA', name: 'Each' },
     ...overrides,
   };
 }
@@ -70,7 +70,7 @@ const createDto = {
   sku: 'TOR-001',
   name: 'Bolt',
   categoryId: 3,
-  unitOfMeasureId: 1,
+  stockUnitId: 1,
 };
 
 describe('categorySubtree', () => {
@@ -174,7 +174,7 @@ describe('ProductsService.create', () => {
     );
     tenant.unitOfMeasure.findUnique.mockResolvedValueOnce(null);
     expect(await errorCode(service.create(auth, createDto))).toBe(
-      'UNIT_OF_MEASURE_INVALID',
+      'STOCK_UNIT_INVALID',
     );
   });
 

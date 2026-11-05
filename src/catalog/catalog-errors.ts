@@ -30,11 +30,11 @@ export const catalogErrors = {
       'CATEGORY_INVALID',
       'Category not found or inactive',
     ),
-  unitInvalid: () =>
+  stockUnitInvalid: () =>
     apiError(
       HttpStatus.BAD_REQUEST,
-      'UNIT_OF_MEASURE_INVALID',
-      'Unit of measure not found',
+      'STOCK_UNIT_INVALID',
+      'Stock unit not found',
     ),
   categoryNameTaken: () =>
     apiError(

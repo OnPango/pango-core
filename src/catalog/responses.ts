@@ -72,8 +72,11 @@ export class ProductDto {
   @ApiProperty({ type: CategoryRefDto })
   category: CategoryRefDto;
 
-  @ApiProperty({ type: UnitOfMeasureDto })
-  unitOfMeasure: UnitOfMeasureDto;
+  @ApiProperty({
+    type: UnitOfMeasureDto,
+    description: 'Unit every quantity of the product is counted in',
+  })
+  stockUnit: UnitOfMeasureDto;
 
   @ApiProperty({ type: Number, nullable: true, example: 5 })
   lengthCm: number | null;
