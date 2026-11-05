@@ -298,8 +298,11 @@ model NotificationRule {
 model Category {
   id          Int      @id @default(autoincrement())
   parentId    Int?     @map("parent_id")
+  /// Unique among siblings (case-insensitive), enforced by the application.
   name        String   @db.VarChar(80)
   description String?
+  /// Inactive categories keep their products but cannot receive new ones.
+  isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -327,9 +330,16 @@ model Product {
   id              Int      @id @default(autoincrement())
   sku             String   @unique @db.VarChar(40)
   categoryId      Int      @map("category_id")
-  unitOfMeasureId Int      @map("unit_of_measure_id")
+  /// Unit every quantity of the product is counted in (stock, movements, requests).
+  stockUnitId     Int      @map("stock_unit_id")
   name            String   @db.VarChar(150)
   description     String?
+  /// Physical data, optional; non-negative (CHECK in the `catalog_fields` migration).
+  lengthCm        Decimal? @map("length_cm") @db.Decimal(10, 2)
+  widthCm         Decimal? @map("width_cm") @db.Decimal(10, 2)
+  heightCm        Decimal? @map("height_cm") @db.Decimal(10, 2)
+  weightKg        Decimal? @map("weight_kg") @db.Decimal(12, 4)
+  volumeL         Decimal? @map("volume_l") @db.Decimal(14, 4)
   /// Lots are only allowed for products that track them.
   tracksLots      Boolean  @default(false) @map("tracks_lots")
   isActive        Boolean  @default(true) @map("is_active")
@@ -339,7 +349,7 @@ model Product {
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   category          Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  unitOfMeasure     UnitOfMeasure      @relation(fields: [unitOfMeasureId], references: [id], onDelete: Restrict)
+  stockUnit         UnitOfMeasure      @relation(fields: [stockUnitId], references: [id], onDelete: Restrict)
   supplierProducts  SupplierProduct[]
   attributeValues   AttributeValue[]
   warehouses        ProductWarehouse[]
@@ -348,7 +358,7 @@ model Product {
   stockRequestLines StockRequestLine[]
 
   @@index([categoryId])
-  @@index([unitOfMeasureId])
+  @@index([stockUnitId])
   @@map("products")
 }
 

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Pango core: the NestJS backend of a multi-tenant inventory SaaS for Colombian SMEs (pymes), with demand forecasting (a separate Python AI service lives outside this repo). The database design — conventions, tables, constraints, business rules, planned views, provisioning and the schema-change workflow — is in `docs/database.md`; read it before touching the data model.
+Pango core: the NestJS backend of a multi-tenant inventory SaaS for Colombian SMEs (pymes), with demand forecasting (a separate Python AI service lives outside this repo). The product catalog API is in `docs/catalog.md`. The database design — conventions, tables, constraints, business rules, planned views, provisioning and the schema-change workflow — is in `docs/database.md`; read it before touching the data model.
 
 ## Language
 
