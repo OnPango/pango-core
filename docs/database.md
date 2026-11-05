@@ -85,9 +85,9 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 | Table | Purpose |
 |---|---|
-| `warehouses` | Physical warehouses. |
+| `warehouses` | Storage warehouses (`WAREHOUSE`) and stores (`STORE`). Code and name unique in the organization (the name case-insensitively, checked by the application). `default_location_id` points to the location created with the warehouse. Never deleted, only deactivated (and only without stock on hand). |
 | `location_levels` | Named levels of a warehouse's location hierarchy, by `depth` (1 = top). |
-| `locations` | Places where stock is kept, arranged as a tree (`parent_id`). |
+| `locations` | Places where stock is kept, arranged as a tree (`parent_id`). Each belongs to one warehouse (`warehouse_id`), with a code unique within it. `level_id` is NULL only for the warehouse's default location (code `DEFAULT`). |
 | `product_warehouses` | A product enabled in a warehouse, with its replenishment parameters (method, service level, lead time, min/max, safety stock, reorder point). |
 | `lots` | Lots of products that track them. |
 | `stock_balances` | On-hand quantity per product-warehouse, location and lot. |
@@ -174,7 +174,7 @@ These span several tables, so a `CHECK` cannot express them:
 - **Movement status:** `DRAFT → CONFIRMED` (updates `stock_balances`). Voiding a confirmed movement registers a reversing movement with `reversal_of_id` and marks the original `VOIDED`.
   - Inter-warehouse transfer: `DRAFT → IN_TRANSIT` (dispatch: decreases the origin) `→ CONFIRMED` (receive: adds `received_quantity` at the destination, sets `received_by_id` and `received_at`).
   - Within a single warehouse, confirmation is one step.
-- **Locations:** a location's parent belongs to the same warehouse, on the level with `depth` one lower. The location of a `stock_balance` and a `default_location_id` must belong to the warehouse of their `product_warehouse`.
+- **Locations:** a location's parent belongs to the same warehouse, on the level with `depth` one lower. A location's level belongs to its warehouse. Every warehouse has exactly one default location (`warehouses.default_location_id`, created with it, no level, code `DEFAULT`); the code `DEFAULT` is reserved for it. The location of a `stock_balance` and a `default_location_id` must belong to the warehouse of their `product_warehouse`.
 - **Stock balances** exist only for products enabled in that warehouse (a `product_warehouse` row exists). They cannot go negative unless `settings.allow_negative_stock`.
 - **Lots** only for products with `tracks_lots = true`.
 - **Products:** the SKU is unique case-insensitively (the application checks it; the index is case-sensitive). The SKU and `tracks_lots` cannot change once the product has movement lines (`tracks_lots` also not once it has lots). New products need an active category.
