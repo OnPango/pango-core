@@ -75,9 +75,9 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 | Table | Purpose |
 |---|---|
-| `categories` | Category tree (`parent_id`). |
+| `categories` | Category (product family) tree (`parent_id`). Names are unique among siblings (case-insensitive, enforced by the application). Inactive categories keep their products but cannot receive new ones. |
 | `units_of_measure` | Units for products and location capacity. |
-| `products` | Products (SKU, category, unit, lot tracking, cached average cost). |
+| `products` | Products (SKU, category, unit, optional physical data `length_cm`/`width_cm`/`height_cm`/`weight_kg`/`volume_l`, lot tracking, cached average cost). Never deleted, only deactivated. |
 | `suppliers`, `supplier_products` | Suppliers and the products they sell, with price, lead time and one preferred supplier per product. |
 | `custom_attributes`, `attribute_options`, `attribute_values` | Organization-defined product fields (EAV), optionally scoped to a category. `LIST` attributes take their values from `attribute_options`. |
 
@@ -119,7 +119,7 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 ### Constraints in hand-written SQL
 
-Prisma cannot express these, so they live at the end of the tenant `init` migration:
+Prisma cannot express these, so they live at the end of the tenant `init` migration (or of the migration noted):
 
 | Constraint | Rule |
 |---|---|
@@ -138,6 +138,7 @@ Prisma cannot express these, so they live at the end of the tenant `init` migrat
 | `location_levels_depth_chk` | `depth ≥ 1`. |
 | `forecast_runs_horizon_chk` | `horizon ≥ 1`. |
 | `forecast_periods_bounds_chk` | `lower_bound ≤ estimated_demand ≤ upper_bound`. |
+| `products_physical_data_chk` | Physical data is NULL or non-negative (`catalog_fields` migration). |
 
 ### Base data
 
@@ -156,7 +157,7 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
   | Transfer | TRANSFER | no |
   | Inventory adjustment | ADJUSTMENT | no |
 
-- **`units_of_measure`**: `EA` (Each).
+- **`units_of_measure`**: `EA` (Each); `catalog_fields` adds `KGM`, `GRM`, `LTR`, `MLT`, `MTR`, `BX`, `PK`.
 - **`roles`**: `Owner` (`is_system = true`) with every permission and every movement type.
 - **`roles`** (`operator_role` migration): `Operator` (`is_system = false`), the MVP's second fixed role, with every base movement type and the catalog, warehouse, stock, movement, stock request, forecast and alert permissions; none of `user.*`, `role.*`, `department.manage`, `settings.manage`, `attribute.manage`, `movement_type.manage`, `notification.manage`.
 - **`settings`**: row `id = 1`, with replenishment drafts using "Purchase receipt".
@@ -176,6 +177,7 @@ These span several tables, so a `CHECK` cannot express them:
 - **Locations:** a location's parent belongs to the same warehouse, on the level with `depth` one lower. The location of a `stock_balance` and a `default_location_id` must belong to the warehouse of their `product_warehouse`.
 - **Stock balances** exist only for products enabled in that warehouse (a `product_warehouse` row exists). They cannot go negative unless `settings.allow_negative_stock`.
 - **Lots** only for products with `tracks_lots = true`.
+- **Products:** the SKU is unique case-insensitively (the application checks it; the index is case-sensitive). The SKU and `tracks_lots` cannot change once the product has movement lines (`tracks_lots` also not once it has lots). New products need an active category.
 - **Custom attributes:** the filled column in `attribute_values` must match `data_type` (`LIST` → `option_id`, and the option must belong to the same attribute). `is_required` attributes are enforced when creating products of their category. Block changes to `data_type` once the attribute has values.
 - **Reservations:**
   - Approving a stock request reserves, per line, up to the warehouse's available stock (`reserved_quantity`).
