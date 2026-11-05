@@ -12,8 +12,9 @@ export const PERMISSIONS_KEY = 'auth:permissions';
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 
 /**
- * Requires every listed permission code, granted on all warehouses (a role
- * assignment with no warehouse).
+ * Requires every listed permission code on at least one role assignment.
+ * ORGANIZATION-scope permissions then apply everywhere; handlers must narrow
+ * WAREHOUSE-scope ones to the warehouses that grant them.
  */
 export const RequirePermissions = (...codes: string[]) =>
   SetMetadata(PERMISSIONS_KEY, codes);
