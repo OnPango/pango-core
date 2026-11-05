@@ -144,6 +144,27 @@ The email links to `WEB_APP_URL_TEMPLATE` (with `{subdomain}` replaced) + `/invi
 
 Accepting creates the account if needed, then the tenant user with the role (idempotent), then claims the invitation and activates the membership in one transaction, so a failed attempt can be retried.
 
+### Users (CU-02)
+
+The organization's users are tenant `users` rows joined with their `public.accounts` (name, email) and membership. Name and email belong to the account, which can be shared by several organizations, so administrators cannot change them. New users join through invitations (above).
+
+An **administrator** is an active user holding a system role (`Owner`) on every warehouse. The MVP has two fixed roles: `Owner` (administrator) and `Operator` (operations, no user or organization administration; seeded by the `operator_role` tenant migration).
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /users?search=&status=&roleId=` | `user.read` | Users sorted by name. `search` matches name or email; `status` is `ACTIVE`, `INACTIVE` or `ALL` (default). |
+| `GET /users/:id` | `user.read` | One user. |
+| `PATCH /users/:id` `{ jobTitle?, departmentId? }` | `user.manage` | Job title and department (`null` clears them). |
+| `PUT /users/:id/roles` `{ roles: [{ roleId, warehouseId? }] }` | `user.manage` | Replaces every role assignment (at least one). |
+| `POST /users/:id/deactivate` | `user.manage` | Sets `users.is_active = false` and revokes the user's refresh tokens in the organization; the access token stops working on the next request because `AuthGuard` reloads the user. History is kept. Idempotent. |
+| `POST /users/:id/activate` | `user.manage` | Reactivates the user. Idempotent. |
+
+Rules:
+
+- Only administrators can grant system roles (same rule as invitations) or change another administrator (`403 FORBIDDEN`).
+- The organization always keeps at least one active administrator (`409 LAST_ADMIN`). Role changes and deactivations lock the system roles (`SELECT … FOR UPDATE`) and check this inside the transaction, so concurrent requests cannot both remove the last one.
+- Users cannot deactivate themselves (`409 SELF_DEACTIVATION`).
+
 ## Errors
 
 Auth errors have the shape `{ "statusCode", "code", "message" }`; the frontend should branch on `code`. Validation errors keep Nest's default shape (`message` is an array).
@@ -169,4 +190,5 @@ Auth errors have the shape `{ "statusCode", "code", "message" }`; the frontend s
 
 - Rate limiting of `login`, `signup`, `refresh` and `invitations/accept`.
 - Password reset (`account_tokens` is ready for another purpose).
-- Managing members (suspend, change roles) and switching organizations from the UI.
+- Switching organizations from the UI.
+- Audit log of user management actions (CU-15).

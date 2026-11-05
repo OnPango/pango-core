@@ -158,6 +158,7 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
 
 - **`units_of_measure`**: `EA` (Each).
 - **`roles`**: `Owner` (`is_system = true`) with every permission and every movement type.
+- **`roles`** (`operator_role` migration): `Operator` (`is_system = false`), the MVP's second fixed role, with every base movement type and the catalog, warehouse, stock, movement, stock request, forecast and alert permissions; none of `user.*`, `role.*`, `department.manage`, `settings.manage`, `attribute.manage`, `movement_type.manage`, `notification.manage`.
 - **`settings`**: row `id = 1`, with replenishment drafts using "Purchase receipt".
 
 **Any future migration that adds a permission must also grant it to the Owner role.**
