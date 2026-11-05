@@ -12,7 +12,14 @@ export class DepartmentRefDto {
 }
 
 export class UserRoleDto {
-  @ApiProperty({ example: 2 })
+  @ApiProperty({
+    example: 8,
+    description:
+      'Role assignment id (`DELETE /users/:id/role-assignments/:assignmentId`)',
+  })
+  assignmentId: number;
+
+  @ApiProperty({ example: 2, description: 'Role id' })
   id: number;
 
   @ApiProperty({ example: 'Operator' })
@@ -20,7 +27,7 @@ export class UserRoleDto {
 
   @ApiProperty({
     example: false,
-    description: 'System roles (Owner) administer the organization',
+    description: 'System roles (Owner) apply to every warehouse',
   })
   isSystem: boolean;
 
@@ -58,10 +65,10 @@ export class UserDto {
   isActive: boolean;
 
   @ApiProperty({
-    example: true,
-    description: 'Holds a system role (Owner) on every warehouse',
+    example: false,
+    description: 'Holds the Owner role: administers every warehouse',
   })
-  isAdmin: boolean;
+  isOwner: boolean;
 
   @ApiProperty({ type: [UserRoleDto] })
   roles: UserRoleDto[];

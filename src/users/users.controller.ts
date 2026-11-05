@@ -8,10 +8,11 @@ import {
   ParseIntPipe,
   Patch,
   Post,
-  Put,
+  Delete,
   Query,
 } from '@nestjs/common';
 import {
+  ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -20,7 +21,11 @@ import {
 import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentAuth, RequirePermissions } from '../auth/decorators.js';
 import { ApiSession, requiresPermissions } from '../swagger/api-docs.js';
-import { ListUsersQueryDto, SetUserRolesDto, UpdateUserDto } from './dto.js';
+import {
+  AddRoleAssignmentDto,
+  ListUsersQueryDto,
+  UpdateUserDto,
+} from './dto.js';
 import { UserDto } from './responses.js';
 import { UsersService } from './users.service.js';
 
@@ -30,6 +35,10 @@ const idParam = ApiParam({
   example: 3,
   description: 'Tenant user id',
 });
+
+const MANAGE_NOTE =
+  'Unless you are the Owner, every role of the user must be on a warehouse where you hold ' +
+  '`user.manage` and below yours there, so an Admin does not manage another Admin. ';
 
 @ApiTags('users')
 @Controller('users')
@@ -41,8 +50,9 @@ export class UsersController {
   @ApiOperation({
     summary: "List the organization's users",
     description:
-      'Sorted by name. Pending invitations are listed by `GET /invitations`. ' +
-      requiresPermissions('user.read'),
+      'Sorted by name. The Owner sees every user; anyone else, the users with a role on a ' +
+      'warehouse where they hold `user.read` (and themselves). Pending invitations are ' +
+      `listed by \`GET /invitations\`. ${requiresPermissions('user.read')}`,
   })
   @ApiOkResponse({ type: [UserDto] })
   @ApiSession({ permissions: ['user.read'], validation: true })
@@ -54,7 +64,7 @@ export class UsersController {
   @RequirePermissions('user.read')
   @ApiOperation({
     summary: 'Get a user',
-    description: requiresPermissions('user.read'),
+    description: `A user you cannot see answers \`404\`. ${requiresPermissions('user.read')}`,
   })
   @idParam
   @ApiOkResponse({ type: UserDto })
@@ -73,8 +83,9 @@ export class UsersController {
     summary: "Update a user's profile in the organization",
     description:
       'Job title and department. Name and email belong to the account (shared by every ' +
-      'organization it joins) and cannot be changed here. Only administrators can change ' +
-      `another administrator. ${requiresPermissions('user.manage')}`,
+      'organization it joins) and cannot be changed here. ' +
+      MANAGE_NOTE +
+      requiresPermissions('user.manage'),
   })
   @idParam
   @ApiOkResponse({ type: UserDto })
@@ -94,18 +105,18 @@ export class UsersController {
     return this.users.update(auth, id, dto);
   }
 
-  @Put(':id/roles')
+  @Post(':id/role-assignments')
   @RequirePermissions('user.manage')
   @ApiOperation({
-    summary: "Replace a user's roles",
+    summary: 'Grant a role to a user on a warehouse',
     description:
-      'Each role applies to one warehouse or to all of them. Only administrators (a system ' +
-      'role on every warehouse) can grant system roles or change another administrator. ' +
-      'The organization must keep at least one active administrator. ' +
-      requiresPermissions('user.manage'),
+      'Every role except Owner needs `warehouseId`; Owner applies to every warehouse and ' +
+      'only an Owner grants it. Otherwise you need `user.manage` on that warehouse and the ' +
+      'role must be below yours there: fewer permissions, all of them yours, and not a role ' +
+      `you hold (an Admin grants Operator, not Admin). ${requiresPermissions('user.manage')}`,
   })
   @idParam
-  @ApiOkResponse({ type: UserDto })
+  @ApiCreatedResponse({ type: UserDto })
   @ApiSession({
     permissions: ['user.manage'],
     validation: true,
@@ -113,18 +124,48 @@ export class UsersController {
       [HttpStatus.BAD_REQUEST]: [
         'ROLE_NOT_FOUND',
         'WAREHOUSE_NOT_FOUND',
-        'DUPLICATE_ROLE_ASSIGNMENT',
+        'ASSIGNMENT_SCOPE_INVALID',
       ],
+      [HttpStatus.FORBIDDEN]: ['ROLE_NOT_BELOW_YOURS'],
       [HttpStatus.NOT_FOUND]: ['USER_NOT_FOUND'],
-      [HttpStatus.CONFLICT]: ['LAST_ADMIN'],
+      [HttpStatus.CONFLICT]: ['DUPLICATE_ROLE_ASSIGNMENT'],
     },
   })
-  setRoles(
+  addAssignment(
     @CurrentAuth() auth: AuthContext,
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: SetUserRolesDto,
+    @Body() dto: AddRoleAssignmentDto,
   ) {
-    return this.users.setRoles(auth, id, dto);
+    return this.users.addAssignment(auth, id, dto);
+  }
+
+  @Delete(':id/role-assignments/:assignmentId')
+  @RequirePermissions('user.manage')
+  @ApiOperation({
+    summary: "Remove one of a user's role assignments",
+    description:
+      'Same rules as granting it. The organization must keep at least one active Owner. ' +
+      requiresPermissions('user.manage'),
+  })
+  @idParam
+  @ApiParam({ name: 'assignmentId', type: Number, example: 8 })
+  @ApiOkResponse({ type: UserDto })
+  @ApiSession({
+    permissions: ['user.manage'],
+    validation: true,
+    errors: {
+      [HttpStatus.BAD_REQUEST]: ['ASSIGNMENT_SCOPE_INVALID'],
+      [HttpStatus.FORBIDDEN]: ['ROLE_NOT_BELOW_YOURS'],
+      [HttpStatus.NOT_FOUND]: ['USER_NOT_FOUND', 'ROLE_ASSIGNMENT_NOT_FOUND'],
+      [HttpStatus.CONFLICT]: ['LAST_OWNER'],
+    },
+  })
+  removeAssignment(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('assignmentId', ParseIntPipe) assignmentId: number,
+  ) {
+    return this.users.removeAssignment(auth, id, assignmentId);
   }
 
   @Post(':id/deactivate')
@@ -135,7 +176,8 @@ export class UsersController {
     description:
       'The user can no longer log in to this organization and their sessions end. Their ' +
       'history (movements, requests) is kept. Idempotent. You cannot deactivate yourself ' +
-      'or the last active administrator. ' +
+      'or the last active Owner. ' +
+      MANAGE_NOTE +
       requiresPermissions('user.manage'),
   })
   @idParam
@@ -145,7 +187,7 @@ export class UsersController {
     validation: true,
     errors: {
       [HttpStatus.NOT_FOUND]: ['USER_NOT_FOUND'],
-      [HttpStatus.CONFLICT]: ['SELF_DEACTIVATION', 'LAST_ADMIN'],
+      [HttpStatus.CONFLICT]: ['SELF_DEACTIVATION', 'LAST_OWNER'],
     },
   })
   deactivate(
@@ -160,7 +202,7 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Reactivate a user',
-    description: `Idempotent. ${requiresPermissions('user.manage')}`,
+    description: `Idempotent. ${MANAGE_NOTE}${requiresPermissions('user.manage')}`,
   })
   @idParam
   @ApiOkResponse({ type: UserDto })

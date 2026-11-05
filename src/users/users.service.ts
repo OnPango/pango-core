@@ -1,14 +1,23 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { AuthContext } from '../auth/auth-context.js';
+import {
+  type AuthContext,
+  isOwner,
+  warehousesWithPermission,
+} from '../auth/auth-context.js';
 import { apiError, authErrors } from '../auth/auth-errors.js';
 import type { Prisma } from '../generated/prisma/tenant/client.js';
 import { ControlPrismaService } from '../prisma/control-prisma.service.js';
+import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
 import {
+  assertCanAssign,
+  isBelowActor,
+  rolePolicyErrors,
+} from '../roles/role-policy.js';
+import {
+  type AddRoleAssignmentDto,
   type ListUsersQueryDto,
-  type RoleAssignmentInputDto,
-  type SetUserRolesDto,
   type UpdateUserDto,
   UserStatusFilter,
 } from './dto.js';
@@ -33,15 +42,21 @@ export const userErrors = {
     ),
   duplicateAssignment: () =>
     apiError(
-      HttpStatus.BAD_REQUEST,
+      HttpStatus.CONFLICT,
       'DUPLICATE_ROLE_ASSIGNMENT',
-      'The same role is assigned twice on the same warehouse',
+      'The user already has this role on this warehouse',
     ),
-  lastAdmin: () =>
+  assignmentNotFound: () =>
+    apiError(
+      HttpStatus.NOT_FOUND,
+      'ROLE_ASSIGNMENT_NOT_FOUND',
+      'Role assignment not found',
+    ),
+  lastOwner: () =>
     apiError(
       HttpStatus.CONFLICT,
-      'LAST_ADMIN',
-      'The organization must keep at least one active administrator',
+      'LAST_OWNER',
+      'The organization must keep at least one active Owner',
     ),
   selfDeactivation: () =>
     apiError(
@@ -58,7 +73,14 @@ const userInclude = {
   roleAssignments: {
     orderBy: { id: 'asc' },
     include: {
-      role: { select: { id: true, name: true, isSystem: true } },
+      role: {
+        select: {
+          id: true,
+          name: true,
+          isSystem: true,
+          permissions: { select: { permission: { select: { code: true } } } },
+        },
+      },
       warehouse: { select: { id: true, name: true } },
     },
   },
@@ -66,25 +88,28 @@ const userInclude = {
 
 type UserWithRoles = Prisma.UserGetPayload<{ include: typeof userInclude }>;
 
-/** Active users holding a system role (Owner) on every warehouse. */
-const adminWhere = {
+const rolePermissionsInclude = {
+  permissions: { include: { permission: { select: { code: true } } } },
+} satisfies Prisma.RoleInclude;
+
+/** Active users holding the Owner role (a system role on every warehouse). */
+const ownerWhere = {
   isActive: true,
   roleAssignments: { some: { warehouseId: null, role: { isSystem: true } } },
 } satisfies Prisma.UserWhereInput;
 
-function isAdmin(user: UserWithRoles): boolean {
+function isOwnerUser(user: UserWithRoles): boolean {
   return user.roleAssignments.some(
     (assignment) => assignment.role.isSystem && assignment.warehouseId === null,
   );
 }
 
-function actorIsAdmin(auth: AuthContext): boolean {
-  return auth.user.roles.some((r) => r.isSystem && r.warehouse === null);
-}
-
-// CU-02: the organization's users are tenant `users` rows; their name and email
-// live in `public.accounts`, shared by every organization of the account, so they
-// are read-only here. New users join through invitations (src/invitations).
+// CU-02, scoped by warehouse. The Owner administers every user. Anyone else sees
+// the users with a role assignment on a warehouse where they hold `user.read`,
+// and manages the ones whose every assignment is on a warehouse where they hold
+// `user.manage`. Roles are granted per warehouse (see role-policy.ts). Name and
+// email belong to `public.accounts`, shared by every organization of the account,
+// so they are read-only here. New users join through invitations.
 @Injectable()
 export class UsersService {
   constructor(
@@ -93,11 +118,29 @@ export class UsersService {
   ) {}
 
   async list(auth: AuthContext, query: ListUsersQueryDto): Promise<UserDto[]> {
-    const where: Prisma.UserWhereInput = {};
-    if (query.status === UserStatusFilter.ACTIVE) where.isActive = true;
-    if (query.status === UserStatusFilter.INACTIVE) where.isActive = false;
+    const filters: Prisma.UserWhereInput[] = [];
+    if (query.status === UserStatusFilter.ACTIVE) {
+      filters.push({ isActive: true });
+    }
+    if (query.status === UserStatusFilter.INACTIVE) {
+      filters.push({ isActive: false });
+    }
     if (query.roleId !== undefined) {
-      where.roleAssignments = { some: { roleId: query.roleId } };
+      filters.push({ roleAssignments: { some: { roleId: query.roleId } } });
+    }
+    if (query.warehouseId !== undefined) {
+      filters.push({
+        roleAssignments: { some: { warehouseId: query.warehouseId } },
+      });
+    }
+    const visible = this.readableWarehouses(auth);
+    if (visible !== 'ALL') {
+      filters.push({
+        OR: [
+          { id: auth.user.id },
+          { roleAssignments: { some: { warehouseId: { in: visible } } } },
+        ],
+      });
     }
     if (query.search) {
       const members = await this.control.organizationMember.findMany({
@@ -112,11 +155,11 @@ export class UsersService {
         },
         select: { accountId: true },
       });
-      where.accountId = { in: members.map((m) => m.accountId) };
+      filters.push({ accountId: { in: members.map((m) => m.accountId) } });
     }
 
     const users = await this.tenant(auth).user.findMany({
-      where,
+      where: { AND: filters },
       include: userInclude,
     });
     const dtos = await this.toDtos(auth, users);
@@ -124,11 +167,7 @@ export class UsersService {
   }
 
   async get(auth: AuthContext, id: number): Promise<UserDto> {
-    const user = await this.tenant(auth).user.findUnique({
-      where: { id },
-      include: userInclude,
-    });
-    if (!user) throw userErrors.notFound();
+    const user = await this.findVisible(this.tenant(auth), auth, id);
     return this.toDto(auth, user);
   }
 
@@ -138,11 +177,7 @@ export class UsersService {
     dto: UpdateUserDto,
   ): Promise<UserDto> {
     const tenant = this.tenant(auth);
-    const user = await tenant.user.findUnique({
-      where: { id },
-      include: userInclude,
-    });
-    if (!user) throw userErrors.notFound();
+    const user = await this.findVisible(tenant, auth, id);
     this.assertCanManage(auth, user);
 
     const data: Prisma.UserUncheckedUpdateInput = {};
@@ -165,45 +200,92 @@ export class UsersService {
     return this.toDto(auth, updated);
   }
 
-  /** Replaces every role assignment of the user. */
-  async setRoles(
+  /** Grants a role on a warehouse (or the Owner role on every warehouse). */
+  async addAssignment(
     auth: AuthContext,
     id: number,
-    dto: SetUserRolesDto,
+    dto: AddRoleAssignmentDto,
   ): Promise<UserDto> {
-    const keys = dto.roles.map((r) => `${r.roleId}:${r.warehouseId ?? '*'}`);
-    if (new Set(keys).size !== keys.length) {
-      throw userErrors.duplicateAssignment();
+    const tenant = this.tenant(auth);
+    const user = await this.findVisible(tenant, auth, id);
+    if (isOwnerUser(user) && !isOwner(auth.user.roles)) {
+      throw authErrors.forbidden();
     }
 
-    const updated = await this.tenant(auth).$transaction(async (tx) => {
-      await this.lockSystemRoles(tx, auth);
-      const user = await tx.user.findUnique({
-        where: { id },
-        include: userInclude,
-      });
-      if (!user) throw userErrors.notFound();
-      this.assertCanManage(auth, user);
-      await this.assertAssignable(tx, auth, dto.roles);
-
-      await tx.roleAssignment.deleteMany({ where: { userId: id } });
-      await tx.roleAssignment.createMany({
-        data: dto.roles.map((r) => ({
-          userId: id,
-          roleId: r.roleId,
-          warehouseId: r.warehouseId ?? null,
-        })),
-      });
-      // Checked after the change, inside the transaction: it rolls back on failure.
-      if ((await tx.user.count({ where: adminWhere })) === 0) {
-        throw userErrors.lastAdmin();
-      }
-      return tx.user.findUniqueOrThrow({
-        where: { id },
-        include: userInclude,
-      });
+    const role = await tenant.role.findUnique({
+      where: { id: dto.roleId },
+      include: rolePermissionsInclude,
     });
-    return this.toDto(auth, updated);
+    if (!role) throw userErrors.roleNotFound();
+    const warehouseId = dto.warehouseId ?? null;
+    if (warehouseId !== null) {
+      const warehouse = await tenant.warehouse.findUnique({
+        where: { id: warehouseId },
+      });
+      if (!warehouse?.isActive) throw userErrors.warehouseNotFound();
+    }
+    assertCanAssign(
+      auth,
+      {
+        id: role.id,
+        isSystem: role.isSystem,
+        permissions: role.permissions.map((p) => p.permission.code),
+      },
+      warehouseId,
+    );
+
+    const existing = await tenant.roleAssignment.findFirst({
+      where: { userId: id, roleId: role.id, warehouseId },
+      select: { id: true },
+    });
+    if (existing) throw userErrors.duplicateAssignment();
+    try {
+      await tenant.roleAssignment.create({
+        data: { userId: id, roleId: role.id, warehouseId },
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) throw userErrors.duplicateAssignment();
+      throw error;
+    }
+    return this.get(auth, id);
+  }
+
+  /** Same rules as granting it; the organization keeps at least one Owner. */
+  async removeAssignment(
+    auth: AuthContext,
+    id: number,
+    assignmentId: number,
+  ): Promise<UserDto> {
+    const tenant = this.tenant(auth);
+    const user = await this.findVisible(tenant, auth, id);
+    if (isOwnerUser(user) && !isOwner(auth.user.roles)) {
+      throw authErrors.forbidden();
+    }
+
+    await tenant.$transaction(async (tx) => {
+      await this.lockSystemRoles(tx, auth);
+      const assignment = await tx.roleAssignment.findFirst({
+        where: { id: assignmentId, userId: id },
+        include: { role: { include: rolePermissionsInclude } },
+      });
+      if (!assignment) throw userErrors.assignmentNotFound();
+      assertCanAssign(
+        auth,
+        {
+          id: assignment.role.id,
+          isSystem: assignment.role.isSystem,
+          permissions: assignment.role.permissions.map(
+            (p) => p.permission.code,
+          ),
+        },
+        assignment.warehouseId,
+      );
+      await tx.roleAssignment.delete({ where: { id: assignmentId } });
+      if ((await tx.user.count({ where: ownerWhere })) === 0) {
+        throw userErrors.lastOwner();
+      }
+    });
+    return this.get(auth, id);
   }
 
   /**
@@ -212,14 +294,15 @@ export class UsersService {
    */
   async deactivate(auth: AuthContext, id: number): Promise<UserDto> {
     if (id === auth.user.id) throw userErrors.selfDeactivation();
+    const tenant = this.tenant(auth);
+    await this.findVisible(tenant, auth, id);
 
-    const updated = await this.tenant(auth).$transaction(async (tx) => {
+    const updated = await tenant.$transaction(async (tx) => {
       await this.lockSystemRoles(tx, auth);
-      const user = await tx.user.findUnique({
+      const user = await tx.user.findUniqueOrThrow({
         where: { id },
         include: userInclude,
       });
-      if (!user) throw userErrors.notFound();
       this.assertCanManage(auth, user);
       if (!user.isActive) return user;
 
@@ -228,8 +311,8 @@ export class UsersService {
         data: { isActive: false },
         include: userInclude,
       });
-      if ((await tx.user.count({ where: adminWhere })) === 0) {
-        throw userErrors.lastAdmin();
+      if ((await tx.user.count({ where: ownerWhere })) === 0) {
+        throw userErrors.lastOwner();
       }
       return result;
     });
@@ -249,11 +332,7 @@ export class UsersService {
 
   async activate(auth: AuthContext, id: number): Promise<UserDto> {
     const tenant = this.tenant(auth);
-    const user = await tenant.user.findUnique({
-      where: { id },
-      include: userInclude,
-    });
-    if (!user) throw userErrors.notFound();
+    const user = await this.findVisible(tenant, auth, id);
     this.assertCanManage(auth, user);
     if (user.isActive) return this.toDto(auth, user);
 
@@ -269,42 +348,65 @@ export class UsersService {
     return this.tenants.client(auth.organization.schemaName);
   }
 
-  /** Only administrators can change another administrator. */
-  private assertCanManage(auth: AuthContext, user: UserWithRoles) {
-    if (isAdmin(user) && !actorIsAdmin(auth)) throw authErrors.forbidden();
+  /** Warehouses whose users the actor sees; `'ALL'` for the Owner. */
+  private readableWarehouses(auth: AuthContext): 'ALL' | number[] {
+    if (isOwner(auth.user.roles)) return 'ALL';
+    return warehousesWithPermission(auth.user.roles, 'user.read');
   }
 
-  private async assertAssignable(
-    tx: Tx,
-    auth: AuthContext,
-    assignments: RoleAssignmentInputDto[],
-  ) {
-    const roleIds = [...new Set(assignments.map((a) => a.roleId))];
-    const roles = await tx.role.findMany({ where: { id: { in: roleIds } } });
-    if (roles.length !== roleIds.length) throw userErrors.roleNotFound();
-    // Same rule as invitations: only administrators grant system roles.
-    if (roles.some((role) => role.isSystem) && !actorIsAdmin(auth)) {
-      throw authErrors.forbidden();
+  /** The user, if the actor can see them (else 404, so ids reveal nothing). */
+  private async findVisible(tenant: Tx, auth: AuthContext, id: number) {
+    const user = await tenant.user.findUnique({
+      where: { id },
+      include: userInclude,
+    });
+    if (!user) throw userErrors.notFound();
+    const visible = this.readableWarehouses(auth);
+    if (
+      visible !== 'ALL' &&
+      user.id !== auth.user.id &&
+      !user.roleAssignments.some(
+        (a) => a.warehouseId !== null && visible.includes(a.warehouseId),
+      )
+    ) {
+      throw userErrors.notFound();
     }
+    return user;
+  }
 
-    const warehouseIds = [
-      ...new Set(
-        assignments.flatMap((a) =>
-          a.warehouseId === undefined ? [] : [a.warehouseId],
-        ),
-      ),
-    ];
-    if (warehouseIds.length > 0) {
-      const active = await tx.warehouse.count({
-        where: { id: { in: warehouseIds }, isActive: true },
-      });
-      if (active !== warehouseIds.length) throw userErrors.warehouseNotFound();
+  /**
+   * Profile changes and (de)activation affect the user everywhere, so every one
+   * of their assignments must be on a warehouse where the actor holds
+   * `user.manage` and be below the actor's level there. Only the Owner changes
+   * an Owner, and an Admin does not manage another Admin.
+   */
+  private assertCanManage(auth: AuthContext, user: UserWithRoles) {
+    if (isOwner(auth.user.roles)) return;
+    if (isOwnerUser(user)) throw authErrors.forbidden();
+    const managed = warehousesWithPermission(auth.user.roles, 'user.manage');
+    if (user.roleAssignments.length === 0) throw authErrors.forbidden();
+    for (const assignment of user.roleAssignments) {
+      const warehouseId = assignment.warehouseId;
+      if (
+        warehouseId === null ||
+        (managed !== 'ALL' && !managed.includes(warehouseId))
+      ) {
+        throw authErrors.forbidden();
+      }
+      const role = {
+        id: assignment.role.id,
+        isSystem: assignment.role.isSystem,
+        permissions: assignment.role.permissions.map((p) => p.permission.code),
+      };
+      if (!isBelowActor(auth, role, warehouseId)) {
+        throw rolePolicyErrors.notBelowYours();
+      }
     }
   }
 
   /**
-   * Serializes changes that can remove an administrator, so two concurrent
-   * requests cannot each remove a different last admin.
+   * Serializes changes that can remove an Owner, so two concurrent requests
+   * cannot each remove a different last one.
    */
   private async lockSystemRoles(tx: Tx, auth: AuthContext) {
     const schema = assertTenantSchema(auth.organization.schemaName);
@@ -347,8 +449,9 @@ export class UsersService {
           jobTitle: user.jobTitle,
           department: user.department,
           isActive: user.isActive,
-          isAdmin: isAdmin(user),
+          isOwner: isOwnerUser(user),
           roles: user.roleAssignments.map((assignment) => ({
+            assignmentId: assignment.id,
             id: assignment.role.id,
             name: assignment.role.name,
             isSystem: assignment.role.isSystem,

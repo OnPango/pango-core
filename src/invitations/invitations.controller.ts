@@ -55,16 +55,23 @@ export class InvitationsController {
   @ApiOperation({
     summary: 'Invite an email to the organization',
     description:
-      'Emails a single-use link to join with the given role, on one warehouse or all. ' +
-      'Replaces any pending invitation for that email. Only holders of a system role (Owner) ' +
-      `on every warehouse can grant a system role. ${requiresPermissions('user.manage')}`,
+      'Emails a single-use link to join with the given role. Every role except Owner needs ' +
+      '`warehouseId`; unless you are the Owner you need `user.manage` there and the role must be ' +
+      'below yours there (fewer permissions, all of them yours, and not a role you hold). ' +
+      'Only an Owner invites an Owner. Replaces any pending invitation for that email. ' +
+      requiresPermissions('user.manage'),
   })
   @ApiCreatedResponse({ type: InvitationDto })
   @ApiSession({
     permissions: ['user.manage'],
     validation: true,
     errors: {
-      [HttpStatus.BAD_REQUEST]: ['ROLE_NOT_FOUND', 'WAREHOUSE_NOT_FOUND'],
+      [HttpStatus.BAD_REQUEST]: [
+        'ROLE_NOT_FOUND',
+        'WAREHOUSE_NOT_FOUND',
+        'ASSIGNMENT_SCOPE_INVALID',
+      ],
+      [HttpStatus.FORBIDDEN]: ['ROLE_NOT_BELOW_YOURS'],
       [HttpStatus.CONFLICT]: ['ALREADY_MEMBER'],
       [HttpStatus.BAD_GATEWAY]: ['MAIL_DELIVERY_FAILED'],
     },
@@ -77,7 +84,9 @@ export class InvitationsController {
   @RequirePermissions('user.read')
   @ApiOperation({
     summary: 'List pending invitations',
-    description: `Not accepted and not revoked, including expired ones. ${requiresPermissions('user.read')}`,
+    description:
+      'Not accepted and not revoked, including expired ones. The Owner sees all; anyone ' +
+      `else, the ones for warehouses where they hold \`user.read\`. ${requiresPermissions('user.read')}`,
   })
   @ApiOkResponse({ type: [PendingInvitationDto] })
   @ApiSession({ permissions: ['user.read'] })
@@ -90,7 +99,9 @@ export class InvitationsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Revoke a pending invitation',
-    description: requiresPermissions('user.manage'),
+    description:
+      'Needs `user.manage` on its warehouse (the Owner revokes any). ' +
+      requiresPermissions('user.manage'),
   })
   @ApiParam({ name: 'id', type: Number, example: 1 })
   @ApiNoContentResponse({ description: 'Revoked' })
