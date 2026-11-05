@@ -30,8 +30,8 @@ import { WarehousesService } from './warehouses.service.js';
 const idParam = ApiParam({ name: 'id', type: Number, example: 1 });
 
 const readAccess =
-  'Shows the warehouses where you hold `warehouse.read` (all of them with an ' +
-  'assignment on every warehouse, or with `warehouse.manage` on every warehouse).';
+  'Shows the warehouses where you hold `warehouse.read`, or all of them if you are the ' +
+  'Owner or hold `warehouse.manage`.';
 
 @ApiTags('warehouses')
 @Controller('warehouses')

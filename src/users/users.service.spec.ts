@@ -1,14 +1,33 @@
 import type { HttpException } from '@nestjs/common';
-import type { AuthContext } from '../auth/auth-context.js';
+import type { AuthContext, RoleGrant } from '../auth/auth-context.js';
 import type { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { UserStatusFilter } from './dto.js';
 import { UsersService } from './users.service.js';
 
-const owner = { id: 1, name: 'Owner', isSystem: true };
-const operator = { id: 2, name: 'Operator', isSystem: false };
+const ownerRole = { id: 1, name: 'Owner', isSystem: true };
+const adminRole = { id: 2, name: 'Admin', isSystem: false };
+const operatorRole = { id: 3, name: 'Operator', isSystem: false };
 
-function authAs(isAdmin: boolean): AuthContext {
+const ADMIN_PERMISSIONS = ['user.read', 'user.manage', 'stock.read'];
+const OPERATOR_PERMISSIONS = ['stock.read'];
+const PERMISSIONS_BY_ROLE: Record<number, string[]> = {
+  2: ADMIN_PERMISSIONS,
+  3: OPERATOR_PERMISSIONS,
+};
+
+const north = { id: 10, name: 'North' };
+const south = { id: 20, name: 'South' };
+
+function grant(
+  role: typeof ownerRole,
+  warehouse: { id: number; name: string } | null,
+  permissions: string[],
+): RoleGrant {
+  return { ...role, warehouse, permissions };
+}
+
+function authAs(roles: RoleGrant[], userId = 1): AuthContext {
   return {
     account: { id: 100, email: 'ana@demo.co', name: 'Ana' },
     organization: {
@@ -17,23 +36,37 @@ function authAs(isAdmin: boolean): AuthContext {
       legalName: 'Demo SAS',
       schemaName: 'tenant_demo',
     },
-    user: {
-      id: 1,
-      jobTitle: null,
-      roles: [
-        {
-          ...(isAdmin ? owner : operator),
-          warehouse: null,
-          permissions: ['user.manage', 'user.read'],
-        },
-      ],
+    user: { id: userId, jobTitle: null, roles },
+  };
+}
+
+const owner = authAs([grant(ownerRole, null, ['user.manage', 'user.read'])]);
+const northAdmin = authAs([grant(adminRole, north, ADMIN_PERMISSIONS)]);
+
+function assignment(
+  id: number,
+  userId: number,
+  role: typeof ownerRole,
+  warehouse: { id: number; name: string } | null,
+) {
+  return {
+    id,
+    userId,
+    roleId: role.id,
+    warehouseId: warehouse?.id ?? null,
+    role: {
+      ...role,
+      permissions: (PERMISSIONS_BY_ROLE[role.id] ?? []).map((code) => ({
+        permission: { code },
+      })),
     },
+    warehouse,
   };
 }
 
 function tenantUser(
   id: number,
-  role: typeof owner | typeof operator,
+  assignments: ReturnType<typeof assignment>[],
   overrides: Record<string, unknown> = {},
 ) {
   return {
@@ -45,17 +78,18 @@ function tenantUser(
     createdAt: new Date('2026-11-01'),
     updatedAt: new Date('2026-11-01'),
     department: null,
-    roleAssignments: [
-      {
-        id,
-        userId: id,
-        roleId: role.id,
-        warehouseId: null,
-        role,
-        warehouse: null,
-      },
-    ],
+    roleAssignments: assignments,
     ...overrides,
+  };
+}
+
+const northOperator = tenantUser(5, [assignment(50, 5, operatorRole, north)]);
+const ownerUser = tenantUser(2, [assignment(20, 2, ownerRole, null)]);
+
+function roleWithPermissions(role: typeof ownerRole, codes: string[]) {
+  return {
+    ...role,
+    permissions: codes.map((code) => ({ permission: { code } })),
   };
 }
 
@@ -77,10 +111,16 @@ function setup() {
       update: vi.fn(),
       count: vi.fn().mockResolvedValue(1),
     },
-    role: { findMany: vi.fn() },
-    warehouse: { count: vi.fn() },
+    role: { findUnique: vi.fn() },
+    warehouse: {
+      findUnique: vi.fn().mockResolvedValue({ id: 10, isActive: true }),
+    },
     department: { findUnique: vi.fn() },
-    roleAssignment: { deleteMany: vi.fn(), createMany: vi.fn() },
+    roleAssignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn(),
+      delete: vi.fn(),
+    },
     $queryRawUnsafe: vi.fn(),
     $transaction: vi.fn(),
   };
@@ -113,209 +153,299 @@ function setup() {
 }
 
 describe('UsersService.list', () => {
-  it('filters by status and role, and searches accounts in the organization', async () => {
-    const { tenant, control, service } = setup();
-    control.organizationMember.findMany.mockResolvedValueOnce([
-      { accountId: 102 },
-    ] as never);
-    tenant.user.findMany.mockResolvedValue([tenantUser(2, operator)]);
+  it('shows a warehouse admin only the users of their warehouses', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findMany.mockResolvedValue([northOperator]);
 
-    const users = await service.list(authAs(true), {
-      search: 'carlos',
+    const users = await service.list(northAdmin, {
       status: UserStatusFilter.ACTIVE,
-      roleId: 2,
     });
 
-    expect(
-      control.organizationMember.findMany.mock.calls[0]?.[0],
-    ).toMatchObject({
-      where: { organizationId: 10 },
+    expect(tenant.user.findMany.mock.calls[0]?.[0].where).toEqual({
+      AND: [
+        { isActive: true },
+        {
+          OR: [
+            { id: 1 },
+            { roleAssignments: { some: { warehouseId: { in: [10] } } } },
+          ],
+        },
+      ],
     });
-    expect(tenant.user.findMany.mock.calls[0]?.[0]).toMatchObject({
-      where: {
-        isActive: true,
-        accountId: { in: [102] },
-        roleAssignments: { some: { roleId: 2 } },
-      },
+    expect(users[0]).toMatchObject({
+      id: 5,
+      isOwner: false,
+      roles: [{ assignmentId: 50, id: 3, warehouse: north }],
     });
-    expect(users).toMatchObject([
-      { id: 2, email: 'user102@demo.co', isAdmin: false, roles: [{ id: 2 }] },
-    ]);
   });
 
-  it('leaves out tenant users without a membership', async () => {
-    const { tenant, control, service } = setup();
-    tenant.user.findMany.mockResolvedValue([tenantUser(2, operator)]);
-    control.organizationMember.findMany.mockResolvedValueOnce([] as never);
-    expect(await service.list(authAs(true), {})).toEqual([]);
+  it('shows the Owner every user and filters by warehouse', async () => {
+    const { tenant, service } = setup();
+    await service.list(owner, { warehouseId: 20 });
+    expect(tenant.user.findMany.mock.calls[0]?.[0].where).toEqual({
+      AND: [{ roleAssignments: { some: { warehouseId: 20 } } }],
+    });
+  });
+});
+
+describe('UsersService.get', () => {
+  it('hides users outside the admin warehouses', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(
+      tenantUser(6, [assignment(60, 6, operatorRole, south)]),
+    );
+    expect(await errorCode(service.get(northAdmin, 6))).toBe('USER_NOT_FOUND');
   });
 });
 
 describe('UsersService.update', () => {
-  it('rejects an inactive department', async () => {
+  it('needs user.manage on every warehouse of the user', async () => {
     const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, operator));
-    tenant.department.findUnique.mockResolvedValue({ id: 4, isActive: false });
+    tenant.user.findUnique.mockResolvedValue(
+      tenantUser(7, [
+        assignment(70, 7, operatorRole, north),
+        assignment(71, 7, operatorRole, south),
+      ]),
+    );
     expect(
-      await errorCode(service.update(authAs(true), 2, { departmentId: 4 })),
-    ).toBe('DEPARTMENT_NOT_FOUND');
+      await errorCode(service.update(northAdmin, 7, { jobTitle: 'x' })),
+    ).toBe('FORBIDDEN');
   });
 
-  it('stores an empty job title as null', async () => {
+  it('lets an admin edit a user of their warehouse', async () => {
     const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, operator));
-    tenant.user.update.mockResolvedValue(tenantUser(2, operator));
-    await service.update(authAs(true), 2, { jobTitle: '' });
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.user.update.mockResolvedValue(northOperator);
+    await service.update(northAdmin, 5, { jobTitle: '' });
     expect(tenant.user.update.mock.calls[0]?.[0]).toMatchObject({
       data: { jobTitle: null },
     });
   });
-
-  it('does not let a non-administrator change an administrator', async () => {
-    const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, owner));
-    expect(
-      await errorCode(service.update(authAs(false), 2, { jobTitle: 'x' })),
-    ).toBe('FORBIDDEN');
-  });
 });
 
-describe('UsersService.setRoles', () => {
-  it('rejects duplicate assignments', async () => {
-    const { service } = setup();
+describe('UsersService.addAssignment', () => {
+  it('lets an admin grant a lower role on their warehouse', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.role.findUnique.mockResolvedValue(
+      roleWithPermissions(operatorRole, OPERATOR_PERMISSIONS),
+    );
+
+    await service.addAssignment(northAdmin, 5, { roleId: 3, warehouseId: 10 });
+
+    expect(tenant.roleAssignment.create).toHaveBeenCalledWith({
+      data: { userId: 5, roleId: 3, warehouseId: 10 },
+    });
+  });
+
+  it('does not let an admin grant their own level', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.role.findUnique.mockResolvedValueOnce(
+      roleWithPermissions(adminRole, ADMIN_PERMISSIONS),
+    );
     expect(
       await errorCode(
-        service.setRoles(authAs(true), 2, {
-          roles: [{ roleId: 2 }, { roleId: 2 }],
-        }),
+        service.addAssignment(northAdmin, 5, { roleId: 2, warehouseId: 10 }),
+      ),
+    ).toBe('ROLE_NOT_BELOW_YOURS');
+
+    // A different role with the same permissions is the same level too.
+    tenant.role.findUnique.mockResolvedValueOnce(
+      roleWithPermissions({ ...adminRole, id: 9 }, ADMIN_PERMISSIONS),
+    );
+    expect(
+      await errorCode(
+        service.addAssignment(northAdmin, 5, { roleId: 9, warehouseId: 10 }),
+      ),
+    ).toBe('ROLE_NOT_BELOW_YOURS');
+  });
+
+  it('rejects another warehouse', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.role.findUnique.mockResolvedValue(
+      roleWithPermissions(operatorRole, OPERATOR_PERMISSIONS),
+    );
+    expect(
+      await errorCode(
+        service.addAssignment(northAdmin, 5, { roleId: 3, warehouseId: 20 }),
+      ),
+    ).toBe('FORBIDDEN');
+  });
+
+  it('rejects a role with permissions the admin lacks', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.role.findUnique.mockResolvedValue(
+      roleWithPermissions(adminRole, [...ADMIN_PERMISSIONS, 'role.manage']),
+    );
+    expect(
+      await errorCode(
+        service.addAssignment(northAdmin, 5, { roleId: 2, warehouseId: 10 }),
+      ),
+    ).toBe('ROLE_NOT_BELOW_YOURS');
+  });
+
+  it('only lets the Owner grant Owner, and only on every warehouse', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.role.findUnique.mockResolvedValue(
+      roleWithPermissions(ownerRole, ADMIN_PERMISSIONS),
+    );
+    expect(
+      await errorCode(service.addAssignment(northAdmin, 5, { roleId: 1 })),
+    ).toBe('FORBIDDEN');
+    expect(
+      await errorCode(
+        service.addAssignment(owner, 5, { roleId: 1, warehouseId: 10 }),
+      ),
+    ).toBe('ASSIGNMENT_SCOPE_INVALID');
+  });
+
+  it('needs a warehouse for roles other than Owner', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.role.findUnique.mockResolvedValue(
+      roleWithPermissions(operatorRole, OPERATOR_PERMISSIONS),
+    );
+    expect(
+      await errorCode(service.addAssignment(owner, 5, { roleId: 3 })),
+    ).toBe('ASSIGNMENT_SCOPE_INVALID');
+  });
+
+  it('rejects a duplicate assignment', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.role.findUnique.mockResolvedValue(
+      roleWithPermissions(operatorRole, OPERATOR_PERMISSIONS),
+    );
+    tenant.roleAssignment.findFirst.mockResolvedValue({ id: 50 });
+    expect(
+      await errorCode(
+        service.addAssignment(northAdmin, 5, { roleId: 3, warehouseId: 10 }),
       ),
     ).toBe('DUPLICATE_ROLE_ASSIGNMENT');
   });
+});
 
-  it('only lets administrators grant system roles', async () => {
+describe('UsersService.removeAssignment', () => {
+  it('keeps the last active Owner', async () => {
     const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, operator));
-    tenant.role.findMany.mockResolvedValue([owner]);
-    expect(
-      await errorCode(
-        service.setRoles(authAs(false), 2, { roles: [{ roleId: 1 }] }),
-      ),
-    ).toBe('FORBIDDEN');
-    expect(tenant.roleAssignment.deleteMany).not.toHaveBeenCalled();
-  });
-
-  it('rejects an unknown role or an inactive warehouse', async () => {
-    const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, operator));
-    tenant.role.findMany.mockResolvedValue([]);
-    expect(
-      await errorCode(
-        service.setRoles(authAs(true), 2, { roles: [{ roleId: 9 }] }),
-      ),
-    ).toBe('ROLE_NOT_FOUND');
-
-    tenant.role.findMany.mockResolvedValue([operator]);
-    tenant.warehouse.count.mockResolvedValue(0);
-    expect(
-      await errorCode(
-        service.setRoles(authAs(true), 2, {
-          roles: [{ roleId: 2, warehouseId: 5 }],
-        }),
-      ),
-    ).toBe('WAREHOUSE_NOT_FOUND');
-  });
-
-  it('fails when the change would leave no administrator', async () => {
-    const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(1, owner));
-    tenant.role.findMany.mockResolvedValue([operator]);
+    tenant.user.findUnique.mockResolvedValue(ownerUser);
+    tenant.roleAssignment.findFirst.mockResolvedValue({
+      ...assignment(20, 2, ownerRole, null),
+      role: roleWithPermissions(ownerRole, []),
+    });
     tenant.user.count.mockResolvedValue(0);
-    expect(
-      await errorCode(
-        service.setRoles(authAs(true), 1, { roles: [{ roleId: 2 }] }),
-      ),
-    ).toBe('LAST_ADMIN');
+    expect(await errorCode(service.removeAssignment(owner, 2, 20))).toBe(
+      'LAST_OWNER',
+    );
     expect(tenant.$queryRawUnsafe).toHaveBeenCalledWith(
       'SELECT "id" FROM "tenant_demo"."roles" WHERE "is_system" FOR UPDATE',
     );
   });
 
-  it('replaces the assignments', async () => {
+  it('lets an admin remove a role on their warehouse', async () => {
     const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, operator));
-    tenant.role.findMany.mockResolvedValue([operator]);
-    tenant.warehouse.count.mockResolvedValue(1);
-    tenant.user.findUniqueOrThrow.mockResolvedValue(tenantUser(2, operator));
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.roleAssignment.findFirst.mockResolvedValue({
+      ...assignment(50, 5, operatorRole, north),
+      role: roleWithPermissions(operatorRole, OPERATOR_PERMISSIONS),
+    });
+    await service.removeAssignment(northAdmin, 5, 50);
+    expect(tenant.roleAssignment.delete).toHaveBeenCalledWith({
+      where: { id: 50 },
+    });
+  });
 
-    await service.setRoles(authAs(true), 2, {
-      roles: [{ roleId: 2, warehouseId: 3 }],
-    });
+  it('does not let an admin change an Owner', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(
+      tenantUser(2, [
+        assignment(20, 2, ownerRole, null),
+        assignment(21, 2, operatorRole, north),
+      ]),
+    );
+    expect(await errorCode(service.removeAssignment(northAdmin, 2, 21))).toBe(
+      'FORBIDDEN',
+    );
+  });
 
-    expect(tenant.roleAssignment.deleteMany).toHaveBeenCalledWith({
-      where: { userId: 2 },
-    });
-    expect(tenant.roleAssignment.createMany).toHaveBeenCalledWith({
-      data: [{ userId: 2, roleId: 2, warehouseId: 3 }],
-    });
+  it('returns 404 for an assignment of another user', async () => {
+    const { tenant, service } = setup();
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    expect(await errorCode(service.removeAssignment(owner, 5, 99))).toBe(
+      'ROLE_ASSIGNMENT_NOT_FOUND',
+    );
   });
 });
 
 describe('UsersService.deactivate', () => {
   it('does not let users deactivate themselves', async () => {
     const { service } = setup();
-    expect(await errorCode(service.deactivate(authAs(true), 1))).toBe(
+    expect(await errorCode(service.deactivate(owner, 1))).toBe(
       'SELF_DEACTIVATION',
     );
   });
 
-  it('keeps the last active administrator', async () => {
+  it('does not let an admin deactivate another admin of their warehouse', async () => {
+    const { tenant, service } = setup();
+    const peer = tenantUser(8, [assignment(80, 8, adminRole, north)]);
+    tenant.user.findUnique.mockResolvedValue(peer);
+    tenant.user.findUniqueOrThrow.mockResolvedValue(peer);
+    expect(await errorCode(service.deactivate(northAdmin, 8))).toBe(
+      'ROLE_NOT_BELOW_YOURS',
+    );
+  });
+
+  it('does not let an admin deactivate an Owner', async () => {
+    const { tenant, service } = setup();
+    // The Owner is visible to the admin because they share the North warehouse.
+    const shared = tenantUser(2, [
+      assignment(20, 2, ownerRole, null),
+      assignment(21, 2, operatorRole, north),
+    ]);
+    tenant.user.findUnique.mockResolvedValue(shared);
+    tenant.user.findUniqueOrThrow.mockResolvedValue(shared);
+    expect(await errorCode(service.deactivate(northAdmin, 2))).toBe(
+      'FORBIDDEN',
+    );
+  });
+
+  it('keeps the last active Owner', async () => {
     const { tenant, control, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, owner));
-    tenant.user.update.mockResolvedValue(
-      tenantUser(2, owner, { isActive: false }),
-    );
+    tenant.user.findUnique.mockResolvedValue(ownerUser);
+    tenant.user.findUniqueOrThrow.mockResolvedValue(ownerUser);
+    tenant.user.update.mockResolvedValue({ ...ownerUser, isActive: false });
     tenant.user.count.mockResolvedValue(0);
-    expect(await errorCode(service.deactivate(authAs(true), 2))).toBe(
-      'LAST_ADMIN',
-    );
+    expect(await errorCode(service.deactivate(owner, 2))).toBe('LAST_OWNER');
     expect(control.refreshToken.updateMany).not.toHaveBeenCalled();
   });
 
-  it('deactivates the user and revokes their sessions in the organization', async () => {
+  it('deactivates a user of the admin warehouse and ends their sessions', async () => {
     const { tenant, control, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(tenantUser(2, operator));
-    tenant.user.update.mockResolvedValue(
-      tenantUser(2, operator, { isActive: false }),
-    );
+    tenant.user.findUnique.mockResolvedValue(northOperator);
+    tenant.user.findUniqueOrThrow.mockResolvedValue(northOperator);
+    tenant.user.update.mockResolvedValue({ ...northOperator, isActive: false });
 
-    const user = await service.deactivate(authAs(true), 2);
+    const user = await service.deactivate(northAdmin, 5);
 
     expect(user.isActive).toBe(false);
-    expect(tenant.user.update.mock.calls[0]?.[0]).toMatchObject({
-      where: { id: 2 },
-      data: { isActive: false },
-    });
     expect(control.refreshToken.updateMany.mock.calls[0]?.[0]).toMatchObject({
-      where: { accountId: 102, organizationId: 10, revokedAt: null },
+      where: { accountId: 105, organizationId: 10, revokedAt: null },
     });
-  });
-
-  it('returns 404 for an unknown user', async () => {
-    const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(null);
-    expect(await errorCode(service.deactivate(authAs(true), 9))).toBe(
-      'USER_NOT_FOUND',
-    );
   });
 });
 
 describe('UsersService.activate', () => {
   it('reactivates an inactive user', async () => {
     const { tenant, service } = setup();
-    tenant.user.findUnique.mockResolvedValue(
-      tenantUser(2, operator, { isActive: false }),
-    );
-    tenant.user.update.mockResolvedValue(tenantUser(2, operator));
-    expect((await service.activate(authAs(true), 2)).isActive).toBe(true);
+    tenant.user.findUnique.mockResolvedValue({
+      ...northOperator,
+      isActive: false,
+    });
+    tenant.user.update.mockResolvedValue(northOperator);
+    expect((await service.activate(northAdmin, 5)).isActive).toBe(true);
   });
 });

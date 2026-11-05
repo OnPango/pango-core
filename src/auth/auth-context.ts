@@ -22,14 +22,34 @@ export interface AuthContext extends SessionProfile {
 
 export type AuthenticatedRequest = Request & { auth?: AuthContext };
 
+// Permission model:
+// - ORGANIZATION-scope permissions (catalog, warehouses, roles, …) apply to the whole
+//   organization once any of the user's assignments grants them.
+// - WAREHOUSE-scope permissions apply only to the warehouse of the assignment that
+//   grants them. An assignment with no warehouse (only the Owner, a system role,
+//   has one) grants them on every warehouse.
+
+/** The user holds a system role (Owner) on every warehouse. */
+export function isOwner(roles: RoleGrant[]): boolean {
+  return roles.some((role) => role.isSystem && role.warehouse === null);
+}
+
 /**
- * Permission codes granted on every warehouse (assignments with no warehouse).
- * ORGANIZATION-scope permissions only count here.
+ * Every permission granted by any assignment. `@RequirePermissions` checks this;
+ * handlers narrow WAREHOUSE-scope permissions to the warehouses that grant them.
  */
-export function organizationWidePermissions(roles: RoleGrant[]): Set<string> {
+export function grantedPermissions(roles: RoleGrant[]): Set<string> {
+  return new Set(roles.flatMap((role) => role.permissions));
+}
+
+/** Permissions that apply on one warehouse: its assignments and the ones with no warehouse. */
+export function permissionsInWarehouse(
+  roles: RoleGrant[],
+  warehouseId: number,
+): Set<string> {
   return new Set(
     roles
-      .filter((role) => role.warehouse === null)
+      .filter((r) => r.warehouse === null || r.warehouse.id === warehouseId)
       .flatMap((r) => r.permissions),
   );
 }

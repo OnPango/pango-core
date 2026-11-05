@@ -1,6 +1,10 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { AuthContext } from '../auth/auth-context.js';
+import {
+  type AuthContext,
+  isOwner,
+  warehousesWithPermission,
+} from '../auth/auth-context.js';
 import { apiError, authErrors } from '../auth/auth-errors.js';
 import { AuthService, type SessionResponse } from '../auth/auth.service.js';
 import {
@@ -15,6 +19,7 @@ import { WebLinks } from '../mail/web-links.service.js';
 import { invitationEmail } from '../mail/templates.js';
 import { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
+import { assertCanAssign } from '../roles/role-policy.js';
 import type { AcceptInvitationDto, CreateInvitationDto } from './dto.js';
 import type {
   InvitationDto,
@@ -89,15 +94,23 @@ export class InvitationsService {
     const { organization } = auth;
     const tenant = this.tenants.client(organization.schemaName);
 
-    const role = await tenant.role.findUnique({ where: { id: dto.roleId } });
+    const role = await tenant.role.findUnique({
+      where: { id: dto.roleId },
+      include: {
+        permissions: { include: { permission: { select: { code: true } } } },
+      },
+    });
     if (!role) throw invitationErrors.roleNotFound();
-    // System roles (Owner) can only be granted by someone holding one on every warehouse.
-    if (
-      role.isSystem &&
-      !auth.user.roles.some((r) => r.isSystem && r.warehouse === null)
-    ) {
-      throw authErrors.forbidden();
-    }
+    // Same rules as granting the role to an existing user.
+    assertCanAssign(
+      auth,
+      {
+        id: role.id,
+        isSystem: role.isSystem,
+        permissions: role.permissions.map((p) => p.permission.code),
+      },
+      dto.warehouseId ?? null,
+    );
     if (dto.warehouseId !== undefined) {
       const warehouse = await tenant.warehouse.findUnique({
         where: { id: dto.warehouseId },
@@ -174,13 +187,21 @@ export class InvitationsService {
     };
   }
 
-  /** Pending (not accepted, not revoked) invitations, including expired ones. */
+  /**
+   * Pending (not accepted, not revoked) invitations, including expired ones. The
+   * Owner sees all of them; anyone else, the ones for warehouses where they hold
+   * `user.read`.
+   */
   async listPending(auth: AuthContext): Promise<PendingInvitationDto[]> {
+    const visible = isOwner(auth.user.roles)
+      ? 'ALL'
+      : warehousesWithPermission(auth.user.roles, 'user.read');
     const invitations = await this.control.organizationInvitation.findMany({
       where: {
         organizationId: auth.organization.id,
         acceptedAt: null,
         revokedAt: null,
+        ...(visible === 'ALL' ? {} : { warehouseId: { in: visible } }),
       },
       include: { invitedBy: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
@@ -208,7 +229,27 @@ export class InvitationsService {
     }));
   }
 
+  /** The Owner revokes any invitation; anyone else needs `user.manage` on its warehouse. */
   async revoke(auth: AuthContext, id: number): Promise<void> {
+    const invitation = await this.control.organizationInvitation.findFirst({
+      where: {
+        id,
+        organizationId: auth.organization.id,
+        acceptedAt: null,
+        revokedAt: null,
+      },
+    });
+    if (!invitation) throw invitationErrors.notFound();
+    if (!isOwner(auth.user.roles)) {
+      const managed = warehousesWithPermission(auth.user.roles, 'user.manage');
+      if (
+        managed !== 'ALL' &&
+        (invitation.warehouseId === null ||
+          !managed.includes(invitation.warehouseId))
+      ) {
+        throw invitationErrors.notFound();
+      }
+    }
     const { count } = await this.control.organizationInvitation.updateMany({
       where: {
         id,
@@ -304,7 +345,11 @@ export class InvitationsService {
       const role = await tx.role.findUnique({
         where: { id: invitation.roleId },
       });
-      if (!role) throw invitationErrors.invalid();
+      // Invitations created before roles were warehouse-scoped may grant a
+      // non-system role on every warehouse, which is no longer allowed.
+      if (!role || role.isSystem !== (invitation.warehouseId === null)) {
+        throw invitationErrors.invalid();
+      }
       const user = await tx.user.upsert({
         where: { accountId },
         create: { accountId },

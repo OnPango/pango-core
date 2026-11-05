@@ -39,7 +39,7 @@ It returns only public data. It reveals whether a subdomain exists, as the login
   2. Rejects the request if the token's organization is not the one the request targets (`TENANT_MISMATCH`), so a token issued for one organization cannot read another one.
   3. Reloads the membership, account, organization and tenant user, so suspensions apply immediately.
   4. Sets `request.auth` (read with `@CurrentAuth()`), whose `organization.schemaName` is the only schema handlers may open with `TenantPrismaService.client()`.
-- `@RequirePermissions('code', …)` requires every listed permission on a role assignment with no warehouse. Warehouse-scoped checks belong to the handlers that know the warehouse.
+- `@RequirePermissions('code', …)` requires every listed permission on at least one role assignment. `ORGANIZATION`-scope permissions then apply everywhere; handlers narrow `WAREHOUSE`-scope permissions to the warehouses that grant them (see *Roles and warehouse scope*).
 
 ## Flows
 
@@ -147,9 +147,9 @@ Cookie sessions are sent by the browser automatically, so cross-site request for
 
 | Endpoint | Access | Purpose |
 |---|---|---|
-| `POST /invitations` `{ email, roleId, warehouseId? }` | `user.manage` | Invite an email with a tenant role, on one warehouse or all. Replaces any pending invitation for that email and sends the email. Only holders of a system role (Owner) on every warehouse can grant a system role. |
-| `GET /invitations` | `user.read` | Pending invitations (including expired ones). |
-| `DELETE /invitations/:id` | `user.manage` | Revoke a pending invitation. |
+| `POST /invitations` `{ email, roleId, warehouseId? }` | `user.manage` on the warehouse | Invite an email with a role on a warehouse (`warehouseId` required except for Owner). Same rules as granting a role (see below). Replaces any pending invitation for that email and sends the email. |
+| `GET /invitations` | `user.read` | Pending invitations (including expired ones): all for the Owner, otherwise the ones for warehouses where you hold `user.read`. |
+| `DELETE /invitations/:id` | `user.manage` on its warehouse | Revoke a pending invitation (the Owner revokes any). |
 | `GET /invitations/preview?token=` | public | Organization, email and `hasAccount` for the accept page. |
 | `POST /invitations/accept` `{ token, password, name? }` | public, on the organization's subdomain | Join and log in. New email: `name` + new password. Existing account: its current password. |
 
@@ -157,25 +157,46 @@ The email links to `WEB_APP_URL_TEMPLATE` (with `{subdomain}` replaced) + `/invi
 
 Accepting creates the account if needed, then the tenant user with the role (idempotent), then claims the invitation and activates the membership in one transaction, so a failed attempt can be retried.
 
-### Users (CU-02)
+### Roles and warehouse scope
 
-The organization's users are tenant `users` rows joined with their `public.accounts` (name, email) and membership. Name and email belong to the account, which can be shared by several organizations, so administrators cannot change them. New users join through invitations (above).
+Warehouses (storage warehouses and stores) are the unit of administration. A **role** groups permissions and is organization-wide; a **role assignment** grants it to a user on one warehouse. A user can hold several assignments (e.g. Admin on North, Operator on South).
 
-An **administrator** is an active user holding a system role (`Owner`) on every warehouse. The MVP has two fixed roles: `Owner` (administrator) and `Operator` (operations, no user or organization administration; seeded by the `operator_role` tenant migration).
+- **Owner** (system role) is the only role assigned with no warehouse: it administers every warehouse, holds every permission and cannot be edited. Only an Owner grants it.
+- Permissions have a scope (`GET /permissions`):
+  - `ORGANIZATION` (catalog, creating warehouses, roles, settings, forecasts…): applies to the whole organization once any assignment grants it.
+  - `WAREHOUSE` (users, stock, movements, requests, alerts…): applies only on the warehouse of the assignment. `user.read` / `user.manage` are warehouse-scoped, so an Admin manages the users of their warehouse.
+- Seeded roles (all editable except Owner): `Owner`; `Admin` (`warehouse_scoped_roles` migration: every permission except `role.manage` and `settings.manage`); `Operator` (operations, no user or role administration).
+- **Granting or removing a role** on a warehouse (assignments and invitations) needs `user.manage` on that warehouse, and the role must be **below the actor's level** there (`403 ROLE_NOT_BELOW_YOURS`): fewer permissions than the actor holds there, all of them held by the actor, and not a role the actor holds there. So an Admin grants Operator but not Admin (nor a role with the same permissions). The Owner grants any role. A non-system role needs a warehouse and Owner needs none (`400 ASSIGNMENT_SCOPE_INVALID`).
 
 | Endpoint | Access | Purpose |
 |---|---|---|
-| `GET /users?search=&status=&roleId=` | `user.read` | Users sorted by name. `search` matches name or email; `status` is `ACTIVE`, `INACTIVE` or `ALL` (default). |
+| `GET /permissions` | `role.read` | Permission catalog with `scope`. |
+| `GET /roles`, `GET /roles/:id` | `role.read` | Roles with their permissions and `assignmentCount`. |
+| `POST /roles` `{ name, description?, permissions }` | `role.manage` | Create a role (it may register every movement type). |
+| `PATCH /roles/:id` | `role.manage` | Rename it or replace its permissions; applies to its holders on their next request. |
+| `DELETE /roles/:id` | `role.manage` | Only without assignments and pending invitations (`409 ROLE_IN_USE`). |
+
+The Owner decides what each role can do. Anyone else given `role.manage` cannot edit a role they hold (`403 ROLE_HELD_BY_YOU`) nor give a role permissions they do not hold (`403 ROLE_EXCEEDS_YOUR_PERMISSIONS`). System roles cannot change (`409 ROLE_SYSTEM_LOCKED`).
+
+### Users (CU-02)
+
+The organization's users are tenant `users` rows joined with their `public.accounts` (name, email) and membership. Name and email belong to the account, which can be shared by several organizations, so they cannot be changed here. New users join through invitations (above).
+
+The Owner sees and manages every user. Anyone else **sees** the users with an assignment on a warehouse where they hold `user.read` (plus themselves; others answer `404`), and **manages** (profile, deactivation) the ones whose every assignment is on a warehouse where they hold `user.manage` and is below their level there (`403 ROLE_NOT_BELOW_YOURS`), so an Admin does not manage another Admin. Only an Owner changes an Owner.
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /users?search=&status=&roleId=&warehouseId=` | `user.read` | Users sorted by name. `search` matches name or email; `status` is `ACTIVE`, `INACTIVE` or `ALL` (default). Each role in `roles` has its `assignmentId`. |
 | `GET /users/:id` | `user.read` | One user. |
 | `PATCH /users/:id` `{ jobTitle?, departmentId? }` | `user.manage` | Job title and department (`null` clears them). |
-| `PUT /users/:id/roles` `{ roles: [{ roleId, warehouseId? }] }` | `user.manage` | Replaces every role assignment (at least one). |
+| `POST /users/:id/role-assignments` `{ roleId, warehouseId? }` | `user.manage` on the warehouse | Grant a role on a warehouse (`409 DUPLICATE_ROLE_ASSIGNMENT` if it already has it). |
+| `DELETE /users/:id/role-assignments/:assignmentId` | `user.manage` on its warehouse | Remove one assignment. |
 | `POST /users/:id/deactivate` | `user.manage` | Sets `users.is_active = false` and revokes the user's refresh tokens in the organization; the access token stops working on the next request because `AuthGuard` reloads the user. History is kept. Idempotent. |
 | `POST /users/:id/activate` | `user.manage` | Reactivates the user. Idempotent. |
 
 Rules:
 
-- Only administrators can grant system roles (same rule as invitations) or change another administrator (`403 FORBIDDEN`).
-- The organization always keeps at least one active administrator (`409 LAST_ADMIN`). Role changes and deactivations lock the system roles (`SELECT … FOR UPDATE`) and check this inside the transaction, so concurrent requests cannot both remove the last one.
+- The organization always keeps at least one active Owner (`409 LAST_OWNER`). Removing assignments and deactivating lock the system roles (`SELECT … FOR UPDATE`) and check this inside the transaction, so concurrent requests cannot both remove the last one.
 - Users cannot deactivate themselves (`409 SELF_DEACTIVATION`).
 
 ## Errors

@@ -123,12 +123,12 @@ describe('AuthGuard', () => {
     );
   });
 
-  it('only counts permissions granted on every warehouse', async () => {
-    const allowed = setup('demo', ['user.read']);
-    await expect(allowed.guard.canActivate(allowed.execution)).resolves.toBe(
+  it('counts permissions granted on any assignment', async () => {
+    const scoped = setup('demo', ['user.manage']);
+    await expect(scoped.guard.canActivate(scoped.execution)).resolves.toBe(
       true,
     );
-    const denied = setup('demo', ['user.manage']);
+    const denied = setup('demo', ['role.manage']);
     expect(await errorCode(denied.guard.canActivate(denied.execution))).toBe(
       'FORBIDDEN',
     );

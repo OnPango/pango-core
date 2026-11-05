@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   type AuthContext,
+  grantedPermissions,
   warehousesWithPermission,
 } from '../auth/auth-context.js';
 import { apiError } from '../auth/auth-errors.js';
@@ -195,11 +196,12 @@ export class WarehousesService {
     return this.tenants.client(auth.organization.schemaName);
   }
 
-  /** Managers see every warehouse; readers, the ones they hold `warehouse.read` on. */
+  /**
+   * `warehouse.manage` is an ORGANIZATION-scope permission, so its holders see
+   * every warehouse; anyone else, the ones where they hold `warehouse.read`.
+   */
   private visibleWarehouses(auth: AuthContext): 'ALL' | number[] {
-    if (
-      warehousesWithPermission(auth.user.roles, 'warehouse.manage') === 'ALL'
-    ) {
+    if (grantedPermissions(auth.user.roles).has('warehouse.manage')) {
       return 'ALL';
     }
     return warehousesWithPermission(auth.user.roles, 'warehouse.read');

@@ -8,7 +8,7 @@ import { TenantResolver } from '../tenancy/tenant-resolver.service.js';
 import { AccessService } from './access.service.js';
 import {
   type AuthenticatedRequest,
-  organizationWidePermissions,
+  grantedPermissions,
 } from './auth-context.js';
 import { authErrors } from './auth-errors.js';
 import { IS_PUBLIC_KEY, PERMISSIONS_KEY } from './decorators.js';
@@ -70,7 +70,7 @@ export class AuthGuard implements CanActivate {
       this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, targets) ??
       [];
     if (required.length > 0) {
-      const granted = organizationWidePermissions(auth.user.roles);
+      const granted = grantedPermissions(auth.user.roles);
       if (!required.every((code) => granted.has(code))) {
         throw authErrors.forbidden();
       }

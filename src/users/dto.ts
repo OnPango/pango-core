@@ -1,16 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
-  ArrayMinSize,
-  IsArray,
   IsEnum,
   IsInt,
   IsOptional,
   IsString,
   MaxLength,
   Min,
-  ValidateNested,
 } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) =>
@@ -42,6 +38,16 @@ export class ListUsersQueryDto {
   @IsOptional()
   @IsEnum(UserStatusFilter)
   status?: UserStatusFilter;
+
+  @ApiPropertyOptional({
+    example: 1,
+    description: 'Only users with a role assignment on this warehouse',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  warehouseId?: number;
 
   @ApiPropertyOptional({
     example: 2,
@@ -80,7 +86,7 @@ export class UpdateUserDto {
   departmentId?: number | null;
 }
 
-export class RoleAssignmentInputDto {
+export class AddRoleAssignmentDto {
   @ApiProperty({ example: 2 })
   @IsInt()
   @Min(1)
@@ -88,23 +94,12 @@ export class RoleAssignmentInputDto {
 
   @ApiPropertyOptional({
     example: 1,
-    description: 'Warehouse the role applies to; omitted = every warehouse',
+    description:
+      'Warehouse the role applies to. Required for every role except system roles (Owner), ' +
+      'which apply to every warehouse',
   })
   @IsOptional()
   @IsInt()
   @Min(1)
   warehouseId?: number;
-}
-
-export class SetUserRolesDto {
-  @ApiProperty({
-    type: [RoleAssignmentInputDto],
-    description: 'Replaces every role assignment of the user',
-  })
-  @IsArray()
-  @ArrayMinSize(1)
-  @ArrayMaxSize(50)
-  @ValidateNested({ each: true })
-  @Type(() => RoleAssignmentInputDto)
-  roles: RoleAssignmentInputDto[];
 }

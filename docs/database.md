@@ -145,8 +145,8 @@ Prisma cannot express these, so they live at the end of the tenant `init` migrat
 The `base_data` migration seeds every new tenant (it is a migration, not a seed, so every tenant is born with it):
 
 - **`permissions`**: 30 permissions.
-  - `ORGANIZATION` scope: `user.read`, `user.manage`, `role.read`, `role.manage`, `department.manage`, `settings.manage`, `warehouse.manage`, `catalog.read`, `product.manage`, `category.manage`, `attribute.manage`, `supplier.manage`, `movement_type.manage`, `forecast.run`, `notification.manage`.
-  - `WAREHOUSE` scope: `warehouse.read`, `location.manage`, `stock.read`, `replenishment.manage`, `movement.read`, `movement.create`, `movement.confirm`, `movement.receive`, `movement.void`, `stock_request.read`, `stock_request.create`, `stock_request.approve`, `forecast.read`, `alert.read`, `alert.resolve`.
+  - `ORGANIZATION` scope (applies to the whole organization once any assignment grants it): `role.read`, `role.manage`, `department.manage`, `settings.manage`, `warehouse.manage`, `catalog.read`, `product.manage`, `category.manage`, `attribute.manage`, `supplier.manage`, `movement_type.manage`, `forecast.run`, `notification.manage`.
+  - `WAREHOUSE` scope (applies on the assignment's warehouse): `user.read`, `user.manage` (moved here by `warehouse_scoped_roles`), `warehouse.read`, `location.manage`, `stock.read`, `replenishment.manage`, `movement.read`, `movement.create`, `movement.confirm`, `movement.receive`, `movement.void`, `stock_request.read`, `stock_request.create`, `stock_request.approve`, `forecast.read`, `alert.read`, `alert.resolve`.
 - **`movement_types`** (`is_base = true`):
 
   | name | nature | counts_as_demand |
@@ -159,6 +159,7 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
 
 - **`units_of_measure`**: `EA` (Each); `catalog_fields` adds `KGM`, `GRM`, `LTR`, `MLT`, `MTR`, `BX`, `PK`.
 - **`roles`**: `Owner` (`is_system = true`) with every permission and every movement type.
+- **`roles`** (`warehouse_scoped_roles` migration): `Admin` (`is_system = false`), every permission except `role.manage` and `settings.manage`, and every movement type.
 - **`roles`** (`operator_role` migration): `Operator` (`is_system = false`), the MVP's second fixed role, with every base movement type and the catalog, warehouse, stock, movement, stock request, forecast and alert permissions; none of `user.*`, `role.*`, `department.manage`, `settings.manage`, `attribute.manage`, `movement_type.manage`, `notification.manage`.
 - **`settings`**: row `id = 1`, with replenishment drafts using "Purchase receipt".
 
@@ -168,8 +169,9 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
 
 These span several tables, so a `CHECK` cannot express them:
 
-- **Access:** a user can act on a warehouse if they have a `role_assignment` for that warehouse (or with `warehouse_id` NULL = every warehouse), and the role includes the permission. For movements, the role must also allow the type in `role_movement_types`. `ORGANIZATION`-scope permissions only count on assignments with `warehouse_id` NULL.
-- **Owner role:** cannot be deleted, keeps every permission and always has at least one assignment.
+- **Access:** a user can act on a warehouse if they have a `role_assignment` for that warehouse (or with `warehouse_id` NULL = every warehouse), and the role includes the permission. For movements, the role must also allow the type in `role_movement_types`. `ORGANIZATION`-scope permissions apply to the whole organization once any assignment grants them.
+- **Role assignments:** `warehouse_id` is NULL only for system roles (Owner), and every system-role assignment has it NULL. Except the Owner, a user grants or removes a role on a warehouse only with `user.manage` there and when the role is below their level there (a strict subset of their permissions there, and not a role they hold there).
+- **Owner role:** cannot be edited or deleted, keeps every permission and always has at least one active holder.
 - **Movement lines by nature:** `INBOUND` → destination only; `OUTBOUND` → origin only; `TRANSFER` → origin and destination; `ADJUSTMENT` → destination (increase) or origin (decrease).
 - **Movement status:** `DRAFT → CONFIRMED` (updates `stock_balances`). Voiding a confirmed movement registers a reversing movement with `reversal_of_id` and marks the original `VOIDED`.
   - Inter-warehouse transfer: `DRAFT → IN_TRANSIT` (dispatch: decreases the origin) `→ CONFIRMED` (receive: adds `received_quantity` at the destination, sets `received_by_id` and `received_at`).

@@ -32,7 +32,9 @@ export class CreateInvitationDto {
 
   @ApiPropertyOptional({
     example: 1,
-    description: 'Warehouse the role applies to; omitted = every warehouse',
+    description:
+      'Warehouse the role applies to. Required for every role except Owner, which ' +
+      'applies to every warehouse',
   })
   @IsOptional()
   @IsInt()

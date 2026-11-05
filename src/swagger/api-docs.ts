@@ -106,7 +106,7 @@ export function ApiPublic(
 
 /**
  * Route behind AuthGuard: access token + organization. Adds the errors the guard
- * itself returns, and the required permissions (granted on every warehouse).
+ * itself returns, and the required permissions.
  */
 export function ApiSession(
   options: ApiEndpointOptions & { permissions?: string[] } = {},
@@ -142,5 +142,5 @@ export function ApiSession(
 
 /** Text for ApiOperation descriptions listing the required permissions. */
 export function requiresPermissions(...permissions: string[]): string {
-  return `Requires ${permissions.map(code).join(', ')} on every warehouse.`;
+  return `Requires ${permissions.map(code).join(', ')}.`;
 }
