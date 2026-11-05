@@ -8,6 +8,7 @@ import { InvitationsModule } from './invitations/invitations.module.js';
 import { MailModule } from './mail/mail.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { RolesModule } from './roles/roles.module.js';
 import { TenancyModule } from './tenancy/tenancy.module.js';
 import { UsersModule } from './users/users.module.js';
 import { WarehousesModule } from './warehouses/warehouses.module.js';
@@ -22,6 +23,7 @@ import { WarehousesModule } from './warehouses/warehouses.module.js';
     InvitationsModule,
     OrganizationsModule,
     UsersModule,
+    RolesModule,
     CatalogModule,
     WarehousesModule,
   ],
