@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { AuthContext } from '../auth/auth-context.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
+import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { catalogErrors } from './catalog-errors.js';
 import {
@@ -28,13 +29,6 @@ type ProductWithRefs = Prisma.ProductGetPayload<{
 
 const toNumber = (value: Prisma.Decimal | null) =>
   value === null ? null : value.toNumber();
-
-export function isUniqueViolation(error: unknown): boolean {
-  return (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === 'P2002'
-  );
-}
 
 // A plain object type (not the DTO class), so spreading it is fine.
 type ProductFields = Pick<ProductDto, keyof ProductDto>;
