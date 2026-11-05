@@ -18,6 +18,19 @@ Every organization is served from its own subdomain (`mi-empresa.onpango.com`). 
 1. The `X-Tenant` header (the frontend sends it when the API lives on another host, e.g. `api.onpango.com`).
 2. The host, when it is a direct subdomain of `APP_BASE_DOMAIN` (`mi-empresa.onpango.com` → `mi-empresa`). Reserved names (`www`, `api`, `app`, …) are never organizations.
 
+### Checking that the organization exists
+
+Any subdomain serves the frontend (wildcard DNS), so on load the frontend calls `GET /organizations/current` (public, no session) before showing the login page:
+
+| Case | Response |
+|---|---|
+| Active organization | `200 { "subdomain", "legalName" }` |
+| No organization with that subdomain | `404 ORGANIZATION_NOT_FOUND` |
+| Suspended or cancelled | `403 ORGANIZATION_INACTIVE` |
+| No subdomain (main domain or a reserved name such as `www`) | `400 TENANT_REQUIRED` |
+
+It returns only public data. It reveals whether a subdomain exists, as the login page already does.
+
 ## Isolation
 
 - Each organization's data lives in its own schema; there is no shared tenant table to filter.
@@ -188,7 +201,7 @@ Auth errors have the shape `{ "statusCode", "code", "message" }`; the frontend s
 
 ## Not done yet
 
-- Rate limiting of `login`, `signup`, `refresh` and `invitations/accept`.
+- Rate limiting of `login`, `signup`, `refresh`, `invitations/accept` and `organizations/current`.
 - Password reset (`account_tokens` is ready for another purpose).
 - Switching organizations from the UI.
 - Audit log of user management actions (CU-15).
