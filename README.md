@@ -1,131 +1,323 @@
-# Onpango
-Sistema ERP especializado en la gestión inteligente de inventarios en pequeñas y medianas empresas (pymes), con trazabilidad de existencias, predicción de demanda y alertas de reposición.
+# Pango Core
 
-> Proyecto de grado — Departamento de Ingeniería de Sistemas y Computación, Universidad del Norte (Barranquilla, Colombia).
+Pango Core is the NestJS backend for Pango, a multi-tenant inventory management
+platform for small and medium-sized businesses (SMEs). It provides the API,
+authentication, organization provisioning and tenant-isolated PostgreSQL data
+model used by the Pango applications.
 
-## Integrantes
+> This repository contains the core API only. The demand-forecasting service is
+> a separate Python service and is not included here yet.
 
-- Esteban Dadul
-- Andrés Monserrat
-- Judith Pérez
-- Carlos Arango
+## Current capabilities
 
-## Problema
+The `dev` branch currently provides:
 
-Las pymes con inventario físico suelen llevar registros manuales o dispersos, no miden la rotación por ítem y no analizan la demanda que generan sus áreas internas. Pango busca controlar el inventario y anticipar la demanda partiendo de un volumen de datos históricos limitado.
+- **Multi-tenant organizations** with one PostgreSQL schema per organization.
+- **Account authentication** with email verification, password authentication,
+  rotating refresh tokens, HttpOnly cookies and CSRF protection.
+- **Organization onboarding** through owner sign-up and automatic tenant-schema
+  provisioning.
+- **Invitations** for adding users to an organization by email.
+- **User administration** with profiles, activation/deactivation and role
+  assignments.
+- **Role-based permissions** with organization-wide and warehouse-scoped
+  permissions.
+- **Product catalog** with products, categories, units of measure, physical
+  dimensions and lot-tracking configuration.
+- **Warehouses and stores** with a default location created automatically.
+- **OpenAPI documentation** through Swagger UI.
+- A database model prepared for suppliers, stock movements, requests,
+  forecasting, replenishment and alerts.
 
-## Qué incluye
+Catalog and warehouse endpoints are implemented today. Stock movements,
+requests, locations, forecasting and alert workflows are represented in the
+tenant schema but their API modules are still planned.
 
-- **Inventario:** catálogo de materiales, stock derivado de movimientos (entradas, salidas, ajustes) y trazabilidad.
-- **Solicitudes internas:** registro de consumo por material, área y periodo, que alimenta el histórico de demanda.
-- **Motor de predicción:** pronóstico de demanda, stock de seguridad y punto de reorden (ROP), con el modelo elegido por serie mediante validación temporal.
-- **Alertas:** aviso cuando un material se acerca a su punto de reorden.
-- **Multi-organización (multi-tenant):** una instancia atiende a varias pymes con datos aislados.
+## Architecture
 
-<!-- Fuera del alcance del MVP: RFID (plugin opcional futuro), transporte, permisos operativos, hoja de vida de herramientas y control financiero. -->
+```text
+Browser / frontend
+        |
+        v
+Pango Core API (NestJS, port 3000)
+        |
+        +--> public schema: organizations, accounts, memberships, invitations,
+        |                   refresh tokens and subscriptions
+        |
+        +--> tenant_<subdomain> schema: users, roles, catalog, warehouses,
+        |                                stock, forecasts and notifications
+        |
+        v
+Supabase PostgreSQL
+```
 
-## Arquitectura
+Each organization is served from a subdomain such as
+`mi-empresa.onpango.com`. The API resolves the tenant from that host or from
+the `X-Tenant` header when the API and frontend use different hosts.
 
-| Componente | Carpeta | Tecnología | Puerto |
-|---|---|---|---|
-| ERP core (monolito modular) | `erp-core/` | _por definir_ | 3000 |
-| Servicio de IA | `ai-service/` | Python, FastAPI | 8000 |
-| Base de datos | — | PostgreSQL | 5432 |
+The `public` schema is the control plane. Every organization gets an isolated
+`tenant_<subdomain>` schema, so tenant tables do not need an
+`organization_id` column. The schema name is validated before it is used by
+the application.
 
-El ERP registra las transacciones; el servicio de IA lee el historial, calcula los parámetros de inventario y los guarda para que el ERP genere las alertas.
+## Technology
 
-## Requisitos
+- [NestJS 12](https://nestjs.com/)
+- TypeScript 6 and ESM
+- Prisma 7 with two generated clients
+- PostgreSQL on Supabase
+- `pg` and `@prisma/adapter-pg`
+- Argon2id password hashing
+- JWT access tokens and rotating opaque refresh tokens
+- Resend for transactional email
+- Swagger / OpenAPI
+- Vitest, Supertest and Oxlint
+- Node.js 24
+- pnpm
 
-- Docker y Docker Compose
+## Repository structure
+
+```text
+.
+├── docs/
+│   ├── auth.md                 # Authentication and invitation flows
+│   ├── catalog.md              # Product catalog API
+│   ├── database.md             # Database design and migration workflow
+│   └── warehouses.md           # Warehouse API
+├── prisma/
+│   ├── control/                # Public/control-plane schema and migrations
+│   ├── tenant/                 # Tenant schema and migrations
+│   ├── control.config.ts
+│   └── tenant.config.ts
+├── scripts/
+│   └── tenants.ts              # Tenant creation and migration commands
+├── src/
+│   ├── auth/
+│   ├── catalog/
+│   ├── invitations/
+│   ├── mail/
+│   ├── prisma/
+│   ├── swagger/
+│   ├── tenancy/
+│   ├── users/
+│   └── warehouses/
+├── test/                       # End-to-end tests
+├── Dockerfile
+├── docker-compose.yml
+└── package.json
+```
+
+## Requirements
+
+- Node.js 24
+- pnpm
 - Git
+- PostgreSQL compatible with Prisma (Supabase is the supported deployment
+  target)
+- Docker and Docker Compose, if running the containerized API
 
-## Puesta en marcha
+Enable pnpm through Corepack if it is not already available:
 
 ```bash
-git clone <url-del-repositorio>
-cd pango
-cp .env.example .env      # ajusta los valores
+corepack enable
+```
+
+## Configuration
+
+Create a local environment file:
+
+```bash
+cp .env.example .env
+```
+
+At minimum, configure:
+
+| Variable | Required | Description |
+|---|---:|---|
+| `DATABASE_URL` | Yes | Supabase transaction-mode pooler URL for application queries |
+| `DIRECT_URL` | Yes | Supabase session-mode pooler URL for migrations |
+| `JWT_SECRET` | Yes | At least 32 characters; signs access tokens |
+| `APP_BASE_DOMAIN` | Yes | Base domain used to resolve organization subdomains |
+| `WEB_APP_URL_TEMPLATE` | Yes | Frontend URL template, for example `http://{subdomain}.localhost:5173` |
+| `COOKIE_DOMAIN` | Production | Usually `.onpango.com`; leave empty for host-only local cookies |
+| `RESEND_API_KEY` | Production | Resend API key; without it emails are logged only |
+| `MAIL_FROM` | Production | Sender using a domain verified in Resend |
+
+Important authentication defaults include 15-minute access tokens,
+30-day refresh tokens, 72-hour invitations and 24-hour email-verification
+links. See [`docs/auth.md`](docs/auth.md) for the complete configuration
+reference.
+
+## Local development
+
+Install dependencies:
+
+```bash
+pnpm install
+```
+
+Generate both Prisma clients:
+
+```bash
+pnpm prisma:generate
+```
+
+Apply control-plane migrations:
+
+```bash
+pnpm db:migrate:control
+```
+
+Create an organization and its tenant schema:
+
+```bash
+pnpm tenant:create --subdomain demo \
+  --tax-id 900000000-1 \
+  --legal-name "Demo SME SAS" \
+  --country CO \
+  --city Bogota \
+  --business-sector RETAIL \
+  --team-size SIZE_1_5 \
+  --product-count COUNT_1_100 \
+  --email owner@demo.pango.local \
+  --name "Demo Owner" \
+  --password "change-me-123"
+```
+
+Apply pending migrations to every existing tenant:
+
+```bash
+pnpm tenant:migrate
+```
+
+Start the API in watch mode:
+
+```bash
+pnpm start:dev
+```
+
+The API listens on `http://localhost:3000` by default. The root endpoint
+returns the basic application response, and Swagger is available at
+`http://localhost:3000/docs`. The OpenAPI document is available at
+`http://localhost:3000/docs-json`.
+
+## Docker
+
+Build and start the API:
+
+```bash
 docker compose up --build
 ```
 
-## Database
+The container exposes port `3000`. Database credentials and application
+configuration still come from the environment; the Compose file does not run
+a local PostgreSQL container.
 
-PostgreSQL on Supabase, one schema per tenant: `public` is the control plane and every organization gets its own `tenant_<slug>` schema. Design, conventions and workflows: [`docs/database.md`](docs/database.md).
+## API overview
+
+### Public and session endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/auth/signup` | Create an owner account and organization |
+| `POST` | `/auth/verify-email` | Confirm an owner's email |
+| `POST` | `/auth/verify-email/resend` | Request another confirmation email |
+| `POST` | `/auth/login` | Start an organization session |
+| `POST` | `/auth/refresh` | Rotate the refresh token |
+| `POST` | `/auth/logout` | Revoke the session |
+| `GET` | `/auth/me` | Read the current account, organization and permissions |
+| `GET` | `/invitations/preview` | Preview an invitation without consuming it |
+| `POST` | `/invitations/accept` | Accept an invitation and start a session |
+
+Browser sessions use HttpOnly cookies named
+`pango_access_<subdomain>` and `pango_refresh_<subdomain>`. Non-browser
+clients may send the access token with the `Authorization` header. Tokens are
+bound to the organization that issued them.
+
+### Implemented modules
+
+| Module | Main endpoints | Permissions |
+|---|---|---|
+| Users | `/users` | `user.read`, `user.manage` |
+| Invitations | `/invitations` | `user.read`, `user.manage` |
+| Products | `/products` | `catalog.read`, `product.manage` |
+| Categories | `/categories` | `catalog.read`, `category.manage` |
+| Units | `/units-of-measure` | `catalog.read` |
+| Warehouses | `/warehouses` | `warehouse.read`, `warehouse.manage` |
+
+Application errors use the shape
+`{ "statusCode": number, "code": string, "message": string }`. Clients
+should branch on the stable `code` value. Validation errors use Nest's
+standard response format.
+
+## Database and tenancy
+
+Pango uses two independent Prisma configurations:
+
+- `prisma/control.config.ts` targets the shared `public` schema.
+- `prisma/tenant.config.ts` targets one `tenant_<subdomain>` schema at a time.
+
+The control plane stores organizations, accounts, memberships, invitations,
+refresh tokens and subscription records. Tenant schemas store users, roles,
+permissions, catalog data, warehouses and the future inventory and forecasting
+data model.
+
+Tenant provisioning creates the schema, applies all tenant migrations, creates
+the organization and adds the owner in a single workflow. New schema changes
+must be added as migrations; already-applied migrations must not be edited.
+Read [`docs/database.md`](docs/database.md) before changing either schema.
+
+## Testing and quality checks
 
 ```bash
-pnpm prisma:generate        # generate both Prisma clients into src/generated/prisma
-pnpm db:migrate:control     # apply the public schema migrations
-pnpm tenant:create --subdomain demo --tax-id 900000000-1 --legal-name "Demo SME SAS" \
-  --country CO --city Bogotá --business-sector RETAIL --team-size SIZE_1_5 \
-  --product-count COUNT_1_100 --email owner@demo.pango.local --name "Demo Owner" --password "change-me-123"
-pnpm tenant:migrate         # apply tenant migrations to every organization
+pnpm test                # Unit tests
+pnpm test:e2e            # End-to-end tests
+pnpm lint                # Type-aware Oxlint
+pnpm build               # Generate Prisma clients and compile NestJS
+pnpm format              # Format source and test files
 ```
 
-API documentation: Swagger UI at `http://localhost:3000/docs` (OpenAPI JSON at `/docs-json`).
+Generated Prisma clients under `src/generated/` are not committed. Run
+`pnpm prisma:generate` after schema changes or after a fresh checkout.
 
-<!-- Verificación: validar(Esteban)
+## Documentation
 
-- ERP core: http://localhost:3000/health
-- Servicio de IA: http://localhost:8000/health
- -->
-## Estructura del repositorio
+- [`docs/auth.md`](docs/auth.md): sessions, cookies, CSRF, email verification,
+  invitations and user administration.
+- [`docs/catalog.md`](docs/catalog.md): product and category behavior,
+  validation rules and catalog endpoints.
+- [`docs/warehouses.md`](docs/warehouses.md): warehouse types, permissions
+  and default locations.
+- [`docs/database.md`](docs/database.md): schemas, naming conventions,
+  migrations, provisioning and data-model rules.
 
-```
-pango/
-├── README.md
-├── .gitignore
-├── .env.example
-├── docker-compose.yml
-├── erp-core/          (código NestJS)
-│   ├── Dockerfile
-│   └── .dockerignore
-├── ai-service/
-│   ├── Dockerfile
-│   ├── .dockerignore
-│   ├── requirements.txt
-│   └── main.py
-├── notebooks/.gitkeep
-└── data/ (datasets)
-    ├── raw/.gitkeep
-    └── processed/.gitkeep
-```
+## Development workflow
 
-## Datos
+- `main` is the production branch.
+- `dev` is the integration branch.
+- Use `feature/<name>`, `bugfix/<name>`, `release/<version>` or
+  `hotfix/<version>` branches.
+- Merge changes through pull requests; do not commit directly to `main` or
+  `dev`.
+- Use commit prefixes such as `feat:`, `fix:`, `docs:` and `chore:`.
+- Never commit `.env`, credentials, secrets or raw datasets.
 
-Los datasets no se incluyen en el repositorio (tamaño y licencias). Descárgalos y colócalos en `data/raw/`:
+## Roadmap
 
-| Dataset | Uso | Fuente |
-|---|---|---|
-| Store Item Demand Forecasting Challenge | Desarrollo y prueba del pipeline | Kaggle |
-| Online Retail II | Prueba con demanda intermitente | UCI Machine Learning Repository |
-| Tienda Virtual del Estado Colombiano (`rgxm-mmea`) | Referencia de tiempos de entrega de proveedores | datos.gov.co |
+The tenant schema already includes the foundation for the following planned
+capabilities:
 
-## Flujo de trabajo
+- Stock movements, transfers, adjustments and stock requests.
+- Location hierarchies and product relocation.
+- Suppliers and supplier-product relationships.
+- Custom product attributes.
+- Replenishment parameters and lead times by product and warehouse.
+- Demand forecasting, forecast runs and replenishment alerts.
+- In-app and email notifications.
+- Audit logs for user, catalog and warehouse changes.
+- Rate limiting for authentication and invitation flows.
+- Password reset and organization switching in the frontend.
 
-- **Ramas principales:** `main` (producción) y `develop` (integración).
-- **Ramas temporales:**
-  - `feature/<nombre>` → nace de `develop`, se fusiona en `develop`.
-  - `release/<x.y.z>` → nace de `develop`, se fusiona en `main` y `develop`.
-  - `hotfix/<x.y.z>` → nace de `main`, se fusiona en `main` y `develop`.
-  - `bugfix/<nombre>` → nace de `develop`, se fusiona en `develop`.
-- **Los cambios entran por Pull Request** desde las ramas temporales hacia su rama destino. Nunca se hace commit directo en `main` ni en `develop`.
-- **Mensajes de commit:** `feat:`, `fix:`, `docs:`, `chore:`.
-- **No subir** `.env`, credenciales ni datos crudos.
+## License
 
-## Estado del proyecto
-
-- [ ] Fase 0: decisiones de diseño
-- [ ] Fase 1: repositorio y entorno Docker
-- [ ] Fase 2: modelo de datos
-- [ ] Fase 3: datos y seeder
-- [ ] Fase 4: ERP core
-- [ ] Fase 5: modelo predictivo (notebook)
-- [ ] Fase 6: servicio de IA
-- [ ] Fase 7: alertas y panel
-- [ ] Fase 8: validación y piloto
-
-## Licencia
-
-Por definir.
-
-Cuando decidas el stack del ERP, completa la fila de tecnología y la URL del clon.
+This project is currently unlicensed (`UNLICENSED` in `package.json`).
