@@ -9,6 +9,7 @@ import { MailModule } from './mail/mail.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { TenancyModule } from './tenancy/tenancy.module.js';
 import { UsersModule } from './users/users.module.js';
+import { WarehousesModule } from './warehouses/warehouses.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { UsersModule } from './users/users.module.js';
     InvitationsModule,
     UsersModule,
     CatalogModule,
+    WarehousesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

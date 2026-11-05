@@ -135,6 +135,14 @@ enum AlertStatus {
   @@map("alert_status")
 }
 
+/// Storage warehouse (bodega) or point of sale (tienda).
+enum WarehouseType {
+  WAREHOUSE
+  STORE
+
+  @@map("warehouse_type")
+}
+
 enum NotificationChannel {
   IN_APP
   EMAIL
@@ -327,26 +335,26 @@ model UnitOfMeasure {
 }
 
 model Product {
-  id              Int      @id @default(autoincrement())
-  sku             String   @unique @db.VarChar(40)
-  categoryId      Int      @map("category_id")
+  id          Int      @id @default(autoincrement())
+  sku         String   @unique @db.VarChar(40)
+  categoryId  Int      @map("category_id")
   /// Unit every quantity of the product is counted in (stock, movements, requests).
-  stockUnitId     Int      @map("stock_unit_id")
-  name            String   @db.VarChar(150)
-  description     String?
+  stockUnitId Int      @map("stock_unit_id")
+  name        String   @db.VarChar(150)
+  description String?
   /// Physical data, optional; non-negative (CHECK in the `catalog_fields` migration).
-  lengthCm        Decimal? @map("length_cm") @db.Decimal(10, 2)
-  widthCm         Decimal? @map("width_cm") @db.Decimal(10, 2)
-  heightCm        Decimal? @map("height_cm") @db.Decimal(10, 2)
-  weightKg        Decimal? @map("weight_kg") @db.Decimal(12, 4)
-  volumeL         Decimal? @map("volume_l") @db.Decimal(14, 4)
+  lengthCm    Decimal? @map("length_cm") @db.Decimal(10, 2)
+  widthCm     Decimal? @map("width_cm") @db.Decimal(10, 2)
+  heightCm    Decimal? @map("height_cm") @db.Decimal(10, 2)
+  weightKg    Decimal? @map("weight_kg") @db.Decimal(12, 4)
+  volumeL     Decimal? @map("volume_l") @db.Decimal(14, 4)
   /// Lots are only allowed for products that track them.
-  tracksLots      Boolean  @default(false) @map("tracks_lots")
-  isActive        Boolean  @default(true) @map("is_active")
+  tracksLots  Boolean  @default(false) @map("tracks_lots")
+  isActive    Boolean  @default(true) @map("is_active")
   /// Cache: recalculated when inbound movements are confirmed.
-  averageCost     Decimal  @default(0) @map("average_cost") @db.Decimal(14, 4)
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  averageCost Decimal  @default(0) @map("average_cost") @db.Decimal(14, 4)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   category          Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   stockUnit         UnitOfMeasure      @relation(fields: [stockUnitId], references: [id], onDelete: Restrict)
@@ -454,14 +462,21 @@ model AttributeValue {
 // ─── Warehouse ──────────────────────────────────────────────────────────────
 
 model Warehouse {
-  id        Int      @id @default(autoincrement())
-  code      String   @unique @db.VarChar(20)
-  name      String   @db.VarChar(80)
-  address   String?  @db.VarChar(200)
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  id                Int           @id @default(autoincrement())
+  code              String        @unique @db.VarChar(20)
+  /// Unique in the organization (case-insensitive), enforced by the application.
+  name              String        @db.VarChar(80)
+  type              WarehouseType @default(WAREHOUSE)
+  address           String?       @db.VarChar(200)
+  /// Location created with the warehouse; stock goes there when no other location
+  /// is given. NULL only while the warehouse is being created.
+  defaultLocationId Int?          @unique @map("default_location_id")
+  isActive          Boolean       @default(true) @map("is_active")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
+  defaultLocation Location?          @relation("WarehouseDefaultLocation", fields: [defaultLocationId], references: [id], onDelete: Restrict)
+  locations       Location[]         @relation("WarehouseLocations")
   roleAssignments RoleAssignment[]
   locationLevels  LocationLevel[]
   products        ProductWarehouse[]
@@ -486,26 +501,33 @@ model LocationLevel {
 }
 
 /// Physical place where stock is kept. Its parent belongs to the same warehouse.
+/// The warehouse's default location has no level.
 model Location {
   id             Int      @id @default(autoincrement())
-  levelId        Int      @map("level_id")
+  warehouseId    Int      @map("warehouse_id")
+  /// Level of the warehouse's hierarchy; NULL only for the default location.
+  levelId        Int?     @map("level_id")
   parentId       Int?     @map("parent_id")
-  code           String   @unique @db.VarChar(40)
+  /// Unique within the warehouse.
+  code           String   @db.VarChar(40)
   capacity       Decimal? @db.Decimal(14, 4)
   capacityUnitId Int?     @map("capacity_unit_id")
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  level                    LocationLevel      @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  warehouse                Warehouse          @relation("WarehouseLocations", fields: [warehouseId], references: [id], onDelete: Restrict)
+  level                    LocationLevel?     @relation(fields: [levelId], references: [id], onDelete: Restrict)
   parent                   Location?          @relation("LocationTree", fields: [parentId], references: [id], onDelete: Restrict)
   children                 Location[]         @relation("LocationTree")
   capacityUnit             UnitOfMeasure?     @relation(fields: [capacityUnitId], references: [id], onDelete: SetNull)
+  defaultOfWarehouse       Warehouse?         @relation("WarehouseDefaultLocation")
   defaultForProducts       ProductWarehouse[]
   stockBalances            StockBalance[]
   originMovementLines      MovementLine[]     @relation("MovementLineOrigin")
   destinationMovementLines MovementLine[]     @relation("MovementLineDestination")
 
+  @@unique([warehouseId, code])
   @@index([levelId])
   @@index([parentId])
   @@index([capacityUnitId])

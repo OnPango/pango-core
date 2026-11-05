@@ -34,6 +34,19 @@ export function organizationWidePermissions(roles: RoleGrant[]): Set<string> {
   );
 }
 
+/**
+ * Warehouses where a permission is granted: `'ALL'` when an assignment with no
+ * warehouse grants it, otherwise the ids of the warehouses whose assignments do.
+ */
+export function warehousesWithPermission(
+  roles: RoleGrant[],
+  code: string,
+): 'ALL' | number[] {
+  const granting = roles.filter((role) => role.permissions.includes(code));
+  if (granting.some((role) => role.warehouse === null)) return 'ALL';
+  return [...new Set(granting.map((role) => role.warehouse!.id))];
+}
+
 export function toSessionProfile(auth: AuthContext): SessionProfile {
   const { schemaName: _schemaName, ...organization } = auth.organization;
   return { account: auth.account, organization, user: auth.user };
