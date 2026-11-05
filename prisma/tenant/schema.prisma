@@ -298,8 +298,11 @@ model NotificationRule {
 model Category {
   id          Int      @id @default(autoincrement())
   parentId    Int?     @map("parent_id")
+  /// Unique among siblings (case-insensitive), enforced by the application.
   name        String   @db.VarChar(80)
   description String?
+  /// Inactive categories keep their products but cannot receive new ones.
+  isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -330,6 +333,12 @@ model Product {
   unitOfMeasureId Int      @map("unit_of_measure_id")
   name            String   @db.VarChar(150)
   description     String?
+  /// Physical data, optional; non-negative (CHECK in the `catalog_fields` migration).
+  lengthCm        Decimal? @map("length_cm") @db.Decimal(10, 2)
+  widthCm         Decimal? @map("width_cm") @db.Decimal(10, 2)
+  heightCm        Decimal? @map("height_cm") @db.Decimal(10, 2)
+  weightKg        Decimal? @map("weight_kg") @db.Decimal(12, 4)
+  volumeL         Decimal? @map("volume_l") @db.Decimal(14, 4)
   /// Lots are only allowed for products that track them.
   tracksLots      Boolean  @default(false) @map("tracks_lots")
   isActive        Boolean  @default(true) @map("is_active")
