@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
 import { InvitationsModule } from './invitations/invitations.module.js';
 import { MailModule } from './mail/mail.module.js';
+import { MovementsModule } from './movements/movements.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RolesModule } from './roles/roles.module.js';
@@ -26,6 +27,7 @@ import { WarehousesModule } from './warehouses/warehouses.module.js';
     RolesModule,
     CatalogModule,
     WarehousesModule,
+    MovementsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
