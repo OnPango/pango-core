@@ -46,6 +46,6 @@ Required: `sku`, `name`, `categoryId`, `stockUnitId` (the unit every quantity of
 
 ## Not done yet
 
-- Lead time and replenishment parameters are per product and warehouse (`product_warehouses`), set with CU-11 / US-16, not on the product.
+- Lead time is per product and warehouse (`product_warehouses`), not on the product; safety stock and reorder point are set in [`replenishment.md`](replenishment.md).
 - Search by location (S6), barcodes/QR (CU-06) and custom attributes.
 - Audit log of catalog changes (CU-15).
