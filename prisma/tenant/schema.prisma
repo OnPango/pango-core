@@ -800,8 +800,9 @@ model ForecastPeriod {
   @@map("forecast_periods")
 }
 
-/// Stock alert. A BELOW_ROP alert creates a DRAFT replenishment movement; confirming
-/// that movement resolves the alert.
+/// Stock alert. At most one OPEN alert per product-warehouse and type (partial unique
+/// index `alerts_open_key`). A BELOW_ROP alert resolves when available stock rises
+/// above the reorder point again.
 model Alert {
   id                 Int         @id @default(autoincrement())
   productWarehouseId Int         @map("product_warehouse_id")
@@ -811,6 +812,11 @@ model Alert {
   severity           Int         @default(1) @db.SmallInt
   status             AlertStatus @default(OPEN)
   suggestedQuantity  Decimal     @default(0) @map("suggested_quantity") @db.Decimal(14, 4)
+  /// Available stock (on hand − reserved) when the alert was raised.
+  availableQuantity  Decimal     @map("available_quantity") @db.Decimal(14, 4)
+  /// Reorder point the stock was compared against, and whether it was set by hand.
+  reorderPoint       Decimal     @map("reorder_point") @db.Decimal(14, 4)
+  reorderPointSource ValueSource @map("reorder_point_source")
   message            String
   createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz
   resolvedAt         DateTime?   @map("resolved_at") @db.Timestamptz

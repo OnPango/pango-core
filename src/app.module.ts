@@ -7,6 +7,7 @@ import { CatalogModule } from './catalog/catalog.module.js';
 import { InvitationsModule } from './invitations/invitations.module.js';
 import { MailModule } from './mail/mail.module.js';
 import { MovementsModule } from './movements/movements.module.js';
+import { ReplenishmentModule } from './replenishment/replenishment.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RolesModule } from './roles/roles.module.js';
@@ -28,6 +29,7 @@ import { WarehousesModule } from './warehouses/warehouses.module.js';
     CatalogModule,
     WarehousesModule,
     MovementsModule,
+    ReplenishmentModule,
   ],
   controllers: [AppController],
   providers: [AppService],

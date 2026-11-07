@@ -1,0 +1,187 @@
+import { Prisma } from '../generated/prisma/tenant/client.js';
+
+type Tx = Prisma.TransactionClient;
+type Decimal = Prisma.Decimal;
+const Decimal = Prisma.Decimal;
+
+export interface StockLevel {
+  onHand: Decimal;
+  /** Held by approved stock requests whose reservation has not expired. */
+  reserved: Decimal;
+  /** On hand − reserved: what the reorder point is compared against. */
+  available: Decimal;
+}
+
+const zeroLevel = (): StockLevel => ({
+  onHand: new Decimal(0),
+  reserved: new Decimal(0),
+  available: new Decimal(0),
+});
+
+/**
+ * Severity of a below-reorder-point alert (1 = lowest): at or below the reorder
+ * point, at or below the safety stock, or nothing available.
+ */
+export function alertSeverity(
+  available: Decimal,
+  safetyStock: Decimal,
+): 1 | 2 | 3 {
+  if (available.lte(0)) return 3;
+  if (available.lte(safetyStock)) return 2;
+  return 1;
+}
+
+/** Quantity that brings available stock up to the max stock, or else to the reorder point. */
+export function suggestedQuantity(
+  available: Decimal,
+  reorderPoint: Decimal,
+  maxStock: Decimal | null,
+): Decimal {
+  return Decimal.max((maxStock ?? reorderPoint).sub(available), 0);
+}
+
+/** Stock levels per product-warehouse; product-warehouses without stock get zeros. */
+export async function stockLevels(
+  tx: Tx,
+  productWarehouses: { id: number; productId: number; warehouseId: number }[],
+  now = new Date(),
+): Promise<Map<number, StockLevel>> {
+  const levels = new Map(productWarehouses.map((pw) => [pw.id, zeroLevel()]));
+  if (productWarehouses.length === 0) return levels;
+
+  const [balances, reservations] = await Promise.all([
+    tx.stockBalance.groupBy({
+      by: ['productWarehouseId'],
+      where: { productWarehouseId: { in: [...levels.keys()] } },
+      _sum: { quantity: true },
+    }),
+    tx.stockRequestLine.findMany({
+      where: {
+        productId: { in: productWarehouses.map((pw) => pw.productId) },
+        reservedQuantity: { gt: 0 },
+        stockRequest: {
+          warehouseId: { in: productWarehouses.map((pw) => pw.warehouseId) },
+          status: { in: ['APPROVED', 'PARTIAL'] },
+          OR: [
+            { reservationExpiresAt: null },
+            { reservationExpiresAt: { gt: now } },
+          ],
+        },
+      },
+      select: {
+        productId: true,
+        reservedQuantity: true,
+        stockRequest: { select: { warehouseId: true } },
+      },
+    }),
+  ]);
+
+  for (const balance of balances) {
+    levels.get(balance.productWarehouseId)!.onHand =
+      balance._sum.quantity ?? new Decimal(0);
+  }
+  const byKey = new Map(
+    productWarehouses.map((pw) => [`${pw.productId}:${pw.warehouseId}`, pw.id]),
+  );
+  for (const line of reservations) {
+    const id = byKey.get(`${line.productId}:${line.stockRequest.warehouseId}`);
+    if (id === undefined) continue;
+    const level = levels.get(id)!;
+    level.reserved = level.reserved.add(line.reservedQuantity);
+  }
+  for (const level of levels.values()) {
+    level.available = level.onHand.sub(level.reserved);
+  }
+  return levels;
+}
+
+/**
+ * CU-12a: compares available stock with the reorder point of each
+ * product-warehouse. Opens a `BELOW_ROP` alert when available ≤ reorder point and
+ * none is open; resolves the open one when available rises above it, or when the
+ * product-warehouse no longer has a reorder point. A reorder point of 0 means none.
+ *
+ * Runs inside the caller's transaction, which must hold the products' row locks
+ * so two evaluations of the same product never race.
+ */
+export async function evaluateAlerts(
+  tx: Tx,
+  productWarehouseIds: number[],
+  now = new Date(),
+): Promise<void> {
+  if (productWarehouseIds.length === 0) return;
+  const productWarehouses = await tx.productWarehouse.findMany({
+    where: { id: { in: productWarehouseIds } },
+    select: {
+      id: true,
+      productId: true,
+      warehouseId: true,
+      isActive: true,
+      safetyStock: true,
+      reorderPoint: true,
+      maxStock: true,
+      valueSource: true,
+      product: {
+        select: {
+          sku: true,
+          isActive: true,
+          stockUnit: { select: { code: true } },
+        },
+      },
+    },
+  });
+  const [levels, open] = await Promise.all([
+    stockLevels(tx, productWarehouses, now),
+    tx.alert.findMany({
+      where: {
+        productWarehouseId: { in: productWarehouseIds },
+        type: 'BELOW_ROP',
+        status: 'OPEN',
+      },
+      select: { id: true, productWarehouseId: true },
+    }),
+  ]);
+  const openAlert = new Map(open.map((a) => [a.productWarehouseId, a.id]));
+
+  const toResolve: number[] = [];
+  for (const pw of productWarehouses) {
+    const { available } = levels.get(pw.id)!;
+    const below =
+      pw.isActive &&
+      pw.product.isActive &&
+      pw.reorderPoint.gt(0) &&
+      available.lte(pw.reorderPoint);
+    const openId = openAlert.get(pw.id);
+
+    if (below && openId === undefined) {
+      await tx.alert.create({
+        data: {
+          productWarehouseId: pw.id,
+          type: 'BELOW_ROP',
+          severity: alertSeverity(available, pw.safetyStock),
+          suggestedQuantity: suggestedQuantity(
+            available,
+            pw.reorderPoint,
+            pw.maxStock,
+          ),
+          availableQuantity: available,
+          reorderPoint: pw.reorderPoint,
+          reorderPointSource: pw.valueSource,
+          message:
+            `${pw.product.sku}: available stock ${available.toString()} ` +
+            `${pw.product.stockUnit.code} is at or below the reorder point ` +
+            `${pw.reorderPoint.toString()}`,
+          createdAt: now,
+        },
+      });
+    } else if (!below && openId !== undefined) {
+      toResolve.push(openId);
+    }
+  }
+  if (toResolve.length > 0) {
+    await tx.alert.updateMany({
+      where: { id: { in: toResolve }, status: 'OPEN' },
+      data: { status: 'RESOLVED', resolvedAt: now },
+    });
+  }
+}

@@ -44,10 +44,10 @@ Request body:
 - The product must be active (`400 PRODUCT_INVALID`), the warehouse active (`400 WAREHOUSE_INVALID`), the department active (`400 DEPARTMENT_INVALID`).
 - `source` in responses is `MANUAL`, or `STOCK_REQUEST` for movements that fulfil a stock request (CU-09).
 - Existing stock per warehouse (US-15) is in `GET /products/:id`.
+- Each movement re-evaluates the stock alerts of its products in the warehouse, in the same transaction (CU-12a, [`replenishment.md`](replenishment.md)).
 
 ## Not done yet
 
 - Drafts, voiding with a reversing movement (`movement.confirm`, `movement.void`) and transfers between warehouses (CU-16, S8).
-- Reorder-point evaluation and alerts after a movement (CU-12a).
 - Registering by scanning a code (CU-06).
 - Backdated movements (`occurred_at` is always the time of registration).
