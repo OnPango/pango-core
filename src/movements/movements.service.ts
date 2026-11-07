@@ -9,6 +9,7 @@ import { Prisma } from '../generated/prisma/tenant/client.js';
 import { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
+import { evaluateAlerts } from '../replenishment/evaluate-alerts.js';
 import {
   AdjustmentDirection,
   type CreateMovementDto,
@@ -159,6 +160,7 @@ export function weightedAverage(
 // movement is registered already confirmed: its lines and the stock balances
 // change in one transaction, and it is never edited or deleted (RN-006).
 // Stock cannot go negative (RN-005) unless `settings.allow_negative_stock`.
+// Each movement re-evaluates the replenishment alerts it affects (CU-12a).
 @Injectable()
 export class MovementsService {
   constructor(
@@ -289,14 +291,20 @@ export class MovementsService {
 
     const id = await tenant.$transaction(
       async (tx) => {
-        const resolved = await this.applyLines(tx, schema, {
-          warehouse: {
-            id: warehouse.id,
-            defaultLocationId: warehouse.defaultLocationId,
+        const { resolved, productWarehouseIds } = await this.applyLines(
+          tx,
+          schema,
+          {
+            warehouse: {
+              id: warehouse.id,
+              defaultLocationId: warehouse.defaultLocationId,
+            },
+            lines,
+            allowNegative,
           },
-          lines,
-          allowNegative,
-        });
+        );
+        // CU-12a: the products' rows are locked, so alerts cannot race.
+        await evaluateAlerts(tx, productWarehouseIds);
         const [{ id }] = await tx.$queryRawUnsafe<{ id: number }[]>(
           `SELECT nextval(pg_get_serial_sequence('"${schema}"."movements"', 'id'))::int AS "id"`,
         );
@@ -584,7 +592,10 @@ export class MovementsService {
         data: { averageCost: averageCost.get(productId)! },
       });
     }
-    return resolved;
+    const productWarehouseIds = [
+      ...new Set([...inWarehouse.values()].map((pw) => pw.id)),
+    ];
+    return { resolved, productWarehouseIds };
   }
 
   /** Adds a (possibly negative) quantity to a balance, creating it if needed. */

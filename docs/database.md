@@ -114,7 +114,7 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 | `forecast_runs` | One execution of the forecasting service. |
 | `forecasts` | Forecast per product-warehouse and run: model, demand class, error metric. One is current per product-warehouse. |
 | `forecast_periods` | Estimated demand and bounds per period. |
-| `alerts` | Stock alerts (`BELOW_ROP`, `STOCKOUT`, `OVERSTOCK`), optionally linked to a draft replenishment movement. |
+| `alerts` | Stock alerts (`BELOW_ROP`, `STOCKOUT`, `OVERSTOCK`) with the available stock and reorder point they were raised with, optionally linked to a draft replenishment movement. |
 | `notifications` | Delivery of an alert to a user through a channel. |
 
 ### Constraints in hand-written SQL
@@ -128,6 +128,7 @@ Prisma cannot express these, so they live at the end of the tenant `init` migrat
 | `stock_balances_product_warehouse_location_lot_key` | Unique `(product_warehouse_id, location_id, lot_id)` `NULLS NOT DISTINCT`. |
 | `supplier_products_preferred_key` | At most one preferred supplier per product (partial unique index). |
 | `forecasts_current_key` | At most one current forecast per product-warehouse (partial unique index). |
+| `alerts_open_key` | At most one `OPEN` alert per product-warehouse and type (partial unique index, `alert_snapshot` migration). |
 | `attribute_values_single_value_chk` | Exactly one value column is set. |
 | `stock_request_lines_quantities_chk` | `requested > 0` and `0 ≤ reserved ≤ requested`. |
 | `movement_lines_quantities_chk` | `quantity > 0` and `0 ≤ received ≤ quantity`. |
@@ -185,7 +186,7 @@ These span several tables, so a `CHECK` cannot express them:
   - Approving a stock request reserves, per line, up to the warehouse's available stock (`reserved_quantity`).
   - Movements that fulfil it consume the reservation; rejecting or cancelling releases it.
   - When `reservation_expires_at` is set, the reservation is released automatically after it. `settings.reservation_expiry_days` proposes the default.
-- **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Crossing it creates a `BELOW_ROP` alert and a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`. Confirming that movement resolves the alert (`RESOLVED`, `resolved_at`).
+- **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Reaching it opens a `BELOW_ROP` alert; rising above it again resolves the alert (`RESOLVED`, `resolved_at`). A reorder point of 0 means none. Planned: the alert also creates a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`, and confirming it resolves the alert. Details in [`replenishment.md`](replenishment.md).
 - **Demand history** (forecast input): only `CONFIRMED` outbound movements whose type has `counts_as_demand = true`.
 
 ### Views (planned)

@@ -3,6 +3,7 @@ import type { AuthContext, RoleGrant } from '../auth/auth-context.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
 import type { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
+import { evaluateAlerts } from '../replenishment/evaluate-alerts.js';
 import { AdjustmentDirection, type CreateMovementDto } from './dto.js';
 import {
   lineEffect,
@@ -10,6 +11,10 @@ import {
   MovementsService,
   weightedAverage,
 } from './movements.service.js';
+
+vi.mock('../replenishment/evaluate-alerts.js', () => ({
+  evaluateAlerts: vi.fn(),
+}));
 
 const D = (value: number) => new Prisma.Decimal(value);
 
@@ -257,6 +262,8 @@ describe('MovementsService.create', () => {
       originLocationId: null,
       destinationLocationId: 7,
     });
+    // CU-12a runs in the same transaction, on the movement's warehouse only.
+    expect(evaluateAlerts).toHaveBeenCalledWith(tenant, [9]);
     expect(result.warehouse).toEqual(north);
     expect(result.registeredBy).toEqual({ id: 1, name: 'Ana' });
   });
