@@ -24,8 +24,8 @@ US-16 (manual safety stock and reorder point) and CU-12 / CU-12a (US-43, US-44):
 
 ## Alert rules (CU-12a)
 
-- Alerts are evaluated per product and warehouse, in the same transaction as every registered movement and every `PUT` of the parameters. Both lock the product's row first, so two evaluations of the same product never race.
-- The reorder point is compared against **available** stock: on hand minus the reservations of `APPROVED` / `PARTIAL` stock requests of that warehouse that have not expired.
+- Alerts are evaluated per product and warehouse, in the same transaction as every registered movement, every `PUT` of the parameters, and every stock request that reserves or releases stock. All of them lock the product's row first, so two evaluations of the same product never race.
+- The reorder point is compared against **available** stock: on hand minus the reservations of `IN_PROGRESS` stock requests of that warehouse that have not expired ([`stock-requests.md`](stock-requests.md)).
 - Available ≤ reorder point, and no open alert of the product-warehouse: a `BELOW_ROP` alert opens (`OPEN`). At most one is open per product-warehouse and type (`alerts_open_key`), so it is never duplicated while the condition persists.
 - Available > reorder point: the open alert becomes `RESOLVED` with `resolvedAt`.
 - A reorder point of `0` means none: no alert is raised, and an open one is resolved. Same for an inactive product or product-warehouse.

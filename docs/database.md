@@ -63,7 +63,7 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 | Table | Purpose |
 |---|---|
-| `settings` | Single row (`id = 1`) of organization-wide settings: currency, time zone, forecast granularity, costing method, negative stock, reservation expiry, movement type for replenishment drafts. |
+| `settings` | Single row (`id = 1`) of organization-wide settings: currency, time zone, forecast granularity, costing method, negative stock, reservation expiry, movement types for replenishment drafts and for fulfilling stock requests. |
 | `departments` | Internal areas that request and consume stock. |
 | `users` | An account's profile inside the organization. `account_id` is a logical reference to `public.accounts.id` (no foreign key: it crosses schemas). |
 | `roles`, `permissions`, `role_permissions` | RBAC. `permissions` is a fixed catalog seeded by migrations; organizations only group permissions into roles. |
@@ -104,8 +104,9 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 | Table | Purpose |
 |---|---|
-| `stock_requests` | Internal requests from a department to a warehouse. |
+| `stock_requests` | Internal requests from a department (requesting area) to a warehouse (attending side): type, status, priority, rejection reason. |
 | `stock_request_lines` | Requested and reserved quantity per product. |
+| `stock_request_events` | Status history of a request: status, user, date and reason. |
 
 ### Forecasting and alerts
 
@@ -162,7 +163,7 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
 - **`roles`**: `Owner` (`is_system = true`) with every permission and every movement type.
 - **`roles`** (`warehouse_scoped_roles` migration): `Admin` (`is_system = false`), every permission except `role.manage` and `settings.manage`, and every movement type.
 - **`roles`** (`operator_role` migration): `Operator` (`is_system = false`), the MVP's second fixed role, with every base movement type and the catalog, warehouse, stock, movement, stock request, forecast and alert permissions; none of `user.*`, `role.*`, `department.manage`, `settings.manage`, `attribute.manage`, `movement_type.manage`, `notification.manage`.
-- **`settings`**: row `id = 1`, with replenishment drafts using "Purchase receipt".
+- **`settings`**: row `id = 1`, with replenishment drafts using "Purchase receipt"; the `stock_request_cycle` migration sets stock requests to be fulfilled with "Consumption issue".
 
 **Any future migration that adds a permission must also grant it to the Owner role.**
 
@@ -183,8 +184,9 @@ These span several tables, so a `CHECK` cannot express them:
 - **Products:** the SKU is unique case-insensitively (the application checks it; the index is case-sensitive). The SKU and `tracks_lots` cannot change once the product has movement lines (`tracks_lots` also not once it has lots). New products need an active category.
 - **Custom attributes:** the filled column in `attribute_values` must match `data_type` (`LIST` → `option_id`, and the option must belong to the same attribute). `is_required` attributes are enforced when creating products of their category. Block changes to `data_type` once the attribute has values.
 - **Reservations:**
-  - Approving a stock request reserves, per line, up to the warehouse's available stock (`reserved_quantity`).
-  - Movements that fulfil it consume the reservation; rejecting or cancelling releases it.
+  - Stock request cycle: `PENDING → IN_PROGRESS → FULFILLED`, or `REJECTED` (with `rejection_reason`), or `CANCELLED` while `PENDING`; each change adds a `stock_request_events` row. Details in [`stock-requests.md`](stock-requests.md).
+  - Starting the attention (`IN_PROGRESS`) reserves the full requested quantity of every line (`reserved_quantity`), only if the warehouse's available stock covers it (no partial attention, RN-016).
+  - The movement that fulfils it releases the reservation; rejecting releases it too.
   - When `reservation_expires_at` is set, the reservation is released automatically after it. `settings.reservation_expiry_days` proposes the default.
 - **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Reaching it opens a `BELOW_ROP` alert; rising above it again resolves the alert (`RESOLVED`, `resolved_at`). A reorder point of 0 means none. Planned: the alert also creates a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`, and confirming it resolves the alert. Details in [`replenishment.md`](replenishment.md).
 - **Demand history** (forecast input): only `CONFIRMED` outbound movements whose type has `counts_as_demand = true`.

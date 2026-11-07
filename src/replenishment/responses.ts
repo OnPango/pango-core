@@ -30,7 +30,7 @@ export class ReplenishmentDto {
 
   @ApiProperty({
     example: 2,
-    description: 'Held by approved stock requests',
+    description: 'Held by stock requests in attention',
   })
   reserved: number;
 

@@ -6,7 +6,7 @@ const Decimal = Prisma.Decimal;
 
 export interface StockLevel {
   onHand: Decimal;
-  /** Held by approved stock requests whose reservation has not expired. */
+  /** Held by stock requests in attention whose reservation has not expired. */
   reserved: Decimal;
   /** On hand − reserved: what the reorder point is compared against. */
   available: Decimal;
@@ -49,32 +49,31 @@ export async function stockLevels(
   const levels = new Map(productWarehouses.map((pw) => [pw.id, zeroLevel()]));
   if (productWarehouses.length === 0) return levels;
 
-  const [balances, reservations] = await Promise.all([
-    tx.stockBalance.groupBy({
-      by: ['productWarehouseId'],
-      where: { productWarehouseId: { in: [...levels.keys()] } },
-      _sum: { quantity: true },
-    }),
-    tx.stockRequestLine.findMany({
-      where: {
-        productId: { in: productWarehouses.map((pw) => pw.productId) },
-        reservedQuantity: { gt: 0 },
-        stockRequest: {
-          warehouseId: { in: productWarehouses.map((pw) => pw.warehouseId) },
-          status: { in: ['APPROVED', 'PARTIAL'] },
-          OR: [
-            { reservationExpiresAt: null },
-            { reservationExpiresAt: { gt: now } },
-          ],
-        },
+  // Sequential: inside a transaction both queries share one connection.
+  const balances = await tx.stockBalance.groupBy({
+    by: ['productWarehouseId'],
+    where: { productWarehouseId: { in: [...levels.keys()] } },
+    _sum: { quantity: true },
+  });
+  const reservations = await tx.stockRequestLine.findMany({
+    where: {
+      productId: { in: productWarehouses.map((pw) => pw.productId) },
+      reservedQuantity: { gt: 0 },
+      stockRequest: {
+        warehouseId: { in: productWarehouses.map((pw) => pw.warehouseId) },
+        status: 'IN_PROGRESS',
+        OR: [
+          { reservationExpiresAt: null },
+          { reservationExpiresAt: { gt: now } },
+        ],
       },
-      select: {
-        productId: true,
-        reservedQuantity: true,
-        stockRequest: { select: { warehouseId: true } },
-      },
-    }),
-  ]);
+    },
+    select: {
+      productId: true,
+      reservedQuantity: true,
+      stockRequest: { select: { warehouseId: true } },
+    },
+  });
 
   for (const balance of balances) {
     levels.get(balance.productWarehouseId)!.onHand =
@@ -130,17 +129,15 @@ export async function evaluateAlerts(
       },
     },
   });
-  const [levels, open] = await Promise.all([
-    stockLevels(tx, productWarehouses, now),
-    tx.alert.findMany({
-      where: {
-        productWarehouseId: { in: productWarehouseIds },
-        type: 'BELOW_ROP',
-        status: 'OPEN',
-      },
-      select: { id: true, productWarehouseId: true },
-    }),
-  ]);
+  const levels = await stockLevels(tx, productWarehouses, now);
+  const open = await tx.alert.findMany({
+    where: {
+      productWarehouseId: { in: productWarehouseIds },
+      type: 'BELOW_ROP',
+      status: 'OPEN',
+    },
+    select: { id: true, productWarehouseId: true },
+  });
   const openAlert = new Map(open.map((a) => [a.productWarehouseId, a.id]));
 
   const toResolve: number[] = [];
