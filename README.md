@@ -25,13 +25,20 @@ The `dev` branch currently provides:
 - **Product catalog** with products, categories, units of measure, physical
   dimensions and lot-tracking configuration.
 - **Warehouses and stores** with a default location created automatically.
+- **Inventory movements**: inbound, outbound and adjustments, confirmed at once,
+  with stock balances, lots and weighted average cost.
+- **Replenishment**: safety stock and reorder point per product and warehouse,
+  and stock alerts raised and resolved automatically.
+- **Departments and internal stock requests**, with reservations, a status
+  history and fulfilment through an outbound movement that feeds demand.
 - **OpenAPI documentation** through Swagger UI.
-- A database model prepared for suppliers, stock movements, requests,
-  forecasting, replenishment and alerts.
+- A database model prepared for suppliers, transfers, locations, forecasting
+  and notifications.
 
-Catalog and warehouse endpoints are implemented today. Stock movements,
-requests, locations, forecasting and alert workflows are represented in the
-tenant schema but their API modules are still planned.
+Catalog, warehouse, movement, replenishment, alert, department and stock request
+endpoints are implemented today (details in `docs/`). Transfers, drafts and
+voiding of movements, location management, forecasting and notifications are
+represented in the tenant schema but their API modules are still planned.
 
 ## Architecture
 
@@ -307,12 +314,13 @@ Generated Prisma clients under `src/generated/` are not committed. Run
 The tenant schema already includes the foundation for the following planned
 capabilities:
 
-- Stock movements, transfers, adjustments and stock requests.
+- Transfers between warehouses, draft movements and voiding with a reversing
+  movement.
 - Location hierarchies and product relocation.
 - Suppliers and supplier-product relationships.
 - Custom product attributes.
-- Replenishment parameters and lead times by product and warehouse.
-- Demand forecasting, forecast runs and replenishment alerts.
+- Lead times and calculated reorder points by product and warehouse.
+- Demand forecasting and forecast runs.
 - In-app and email notifications.
 - Audit logs for user, catalog and warehouse changes.
 - Rate limiting for authentication and invitation flows.
