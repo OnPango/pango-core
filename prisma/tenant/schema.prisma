@@ -54,15 +54,26 @@ enum MovementStatus {
   @@map("movement_status")
 }
 
+/// PENDING → IN_PROGRESS (stock reserved) → FULFILLED, or REJECTED with a reason;
+/// CANCELLED by the requester while PENDING. No partial fulfilment (RN-016).
 enum StockRequestStatus {
   PENDING
-  APPROVED
-  PARTIAL
+  IN_PROGRESS
   FULFILLED
   REJECTED
   CANCELLED
 
   @@map("stock_request_status")
+}
+
+/// Only INTERNAL_CONSUMPTION feeds the demand history (RN-008).
+enum StockRequestType {
+  INTERNAL_CONSUMPTION
+  INTERNAL_REPLENISHMENT
+  RETURN
+  INCIDENT
+
+  @@map("stock_request_type")
 }
 
 enum Granularity {
@@ -166,11 +177,15 @@ model Settings {
   reservationExpiryDays       Int?          @map("reservation_expiry_days")
   /// Movement type used for automatic replenishment drafts.
   replenishmentMovementTypeId Int?          @map("replenishment_movement_type_id")
+  /// Outbound movement type that fulfils internal consumption requests.
+  stockRequestMovementTypeId  Int?          @map("stock_request_movement_type_id")
   updatedAt                   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  replenishmentMovementType MovementType? @relation(fields: [replenishmentMovementTypeId], references: [id], onDelete: SetNull)
+  replenishmentMovementType MovementType? @relation("SettingsReplenishmentType", fields: [replenishmentMovementTypeId], references: [id], onDelete: SetNull)
+  stockRequestMovementType  MovementType? @relation("SettingsStockRequestType", fields: [stockRequestMovementTypeId], references: [id], onDelete: SetNull)
 
   @@index([replenishmentMovementTypeId])
+  @@index([stockRequestMovementTypeId])
   @@map("settings")
 }
 
@@ -201,11 +216,12 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  department          Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  department          Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   roleAssignments     RoleAssignment[]
-  registeredMovements Movement[]       @relation("MovementRegisteredBy")
-  receivedMovements   Movement[]       @relation("MovementReceivedBy")
+  registeredMovements Movement[]          @relation("MovementRegisteredBy")
+  receivedMovements   Movement[]          @relation("MovementReceivedBy")
   stockRequests       StockRequest[]
+  stockRequestEvents  StockRequestEvent[]
   notifications       Notification[]
 
   @@index([departmentId])
@@ -621,7 +637,8 @@ model MovementType {
   isBase         Boolean        @default(false) @map("is_base")
   createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
 
-  replenishmentSettings Settings[]
+  replenishmentSettings Settings[]         @relation("SettingsReplenishmentType")
+  stockRequestSettings  Settings[]         @relation("SettingsStockRequestType")
   roles                 RoleMovementType[]
   movements             Movement[]
 
@@ -702,26 +719,32 @@ model MovementLine {
 
 // ─── Stock requests ─────────────────────────────────────────────────────────
 
-/// Internal request for stock from a department. Approving it reserves stock.
+/// Internal request for stock from a department (the requesting area) to a warehouse
+/// (the attending side). Starting its attention reserves the requested stock.
 model StockRequest {
   id                   Int                @id @default(autoincrement())
   number               String             @unique @db.VarChar(20)
   requestedById        Int                @map("requested_by_id")
   departmentId         Int                @map("department_id")
   warehouseId          Int                @map("warehouse_id")
+  type                 StockRequestType
   status               StockRequestStatus @default(PENDING)
   /// 1 = highest.
   priority             Int                @default(2) @db.SmallInt
   requiredDate         DateTime?          @map("required_date") @db.Date
   /// When set, reservations are released automatically after this instant.
   reservationExpiresAt DateTime?          @map("reservation_expires_at") @db.Timestamptz
+  notes                String?
+  /// Required when the request is REJECTED.
+  rejectionReason      String?            @map("rejection_reason")
   createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz
   updatedAt            DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  requestedBy User               @relation(fields: [requestedById], references: [id], onDelete: Restrict)
-  department  Department         @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  warehouse   Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  requestedBy User                @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  department  Department          @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  warehouse   Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
   lines       StockRequestLine[]
+  events      StockRequestEvent[]
   movements   Movement[]
 
   @@index([warehouseId, status])
@@ -735,7 +758,7 @@ model StockRequestLine {
   lineNumber        Int     @map("line_number") @db.SmallInt
   productId         Int     @map("product_id")
   requestedQuantity Decimal @map("requested_quantity") @db.Decimal(14, 4)
-  /// Reserved on approval, up to the warehouse's available stock.
+  /// Reserved in full when attention starts; released when fulfilled or rejected.
   reservedQuantity  Decimal @default(0) @map("reserved_quantity") @db.Decimal(14, 4)
 
   stockRequest StockRequest @relation(fields: [stockRequestId], references: [id], onDelete: Cascade)
@@ -744,6 +767,23 @@ model StockRequestLine {
   @@id([stockRequestId, lineNumber])
   @@index([productId])
   @@map("stock_request_lines")
+}
+
+/// Status history of a stock request: who moved it to each status, and when.
+model StockRequestEvent {
+  id             Int                @id @default(autoincrement())
+  stockRequestId Int                @map("stock_request_id")
+  status         StockRequestStatus
+  changedById    Int                @map("changed_by_id")
+  reason         String?
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz
+
+  stockRequest StockRequest @relation(fields: [stockRequestId], references: [id], onDelete: Cascade)
+  changedBy    User         @relation(fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([stockRequestId])
+  @@index([changedById])
+  @@map("stock_request_events")
 }
 
 // ─── Forecasting and alerts ─────────────────────────────────────────────────

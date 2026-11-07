@@ -15,6 +15,7 @@ import {
   type CreateMovementDto,
   type ListMovementsQueryDto,
   type ListMovementTypesQueryDto,
+  type MovementLineInputDto,
 } from './dto.js';
 import { movementErrors } from './movement-errors.js';
 import type {
@@ -30,7 +31,7 @@ const Decimal = Prisma.Decimal;
 /** Whether a line adds stock to its location or removes it. */
 type Effect = 'IN' | 'OUT';
 
-interface PlannedLine {
+export interface PlannedLine {
   lineNumber: number;
   product: { id: number; sku: string };
   effect: Effect;
@@ -80,6 +81,19 @@ const movementInclude = {
 type MovementWithRefs = Prisma.MovementGetPayload<{
   include: typeof movementInclude;
 }>;
+
+/** A confirmed movement to record inside a caller's transaction. */
+export interface MovementRecord {
+  movementTypeId: number;
+  registeredById: number;
+  warehouse: { id: number; defaultLocationId: number | null };
+  lines: PlannedLine[];
+  allowNegative: boolean;
+  departmentId?: number | null;
+  stockRequestId?: number | null;
+  documentRef?: string | null;
+  notes?: string | null;
+}
 
 /** Movement number shown to users, derived from its id. */
 export const movementNumber = (id: number) =>
@@ -285,59 +299,28 @@ export class MovementsService {
       if (!department?.isActive) throw movementErrors.departmentInvalid();
     }
 
-    const lines = await this.planLines(tenant, warehouse.id, nature, dto);
-    const allowNegative = settings?.allowNegativeStock ?? false;
+    const lines = await this.planLines(tenant, warehouse.id, nature, dto.lines);
     const schema = assertTenantSchema(auth.organization.schemaName);
-
     const id = await tenant.$transaction(
-      async (tx) => {
-        const { resolved, productWarehouseIds } = await this.applyLines(
-          tx,
-          schema,
-          {
-            warehouse: {
-              id: warehouse.id,
-              defaultLocationId: warehouse.defaultLocationId,
-            },
-            lines,
-            allowNegative,
-          },
-        );
-        // CU-12a: the products' rows are locked, so alerts cannot race.
-        await evaluateAlerts(tx, productWarehouseIds);
-        const [{ id }] = await tx.$queryRawUnsafe<{ id: number }[]>(
-          `SELECT nextval(pg_get_serial_sequence('"${schema}"."movements"', 'id'))::int AS "id"`,
-        );
-        await tx.movement.create({
-          data: {
-            id,
-            number: movementNumber(id),
-            movementTypeId: type.id,
-            registeredById: auth.user.id,
-            departmentId: dto.departmentId ?? null,
-            status: 'CONFIRMED',
-            documentRef: dto.documentRef || null,
-            notes: dto.notes || null,
-            lines: {
-              create: resolved.map((line) => ({
-                lineNumber: line.lineNumber,
-                productId: line.productId,
-                originLocationId:
-                  line.effect === 'OUT' ? line.locationId : null,
-                destinationLocationId:
-                  line.effect === 'IN' ? line.locationId : null,
-                lotId: line.lotId,
-                quantity: line.quantity,
-                unitCost: line.unitCost,
-              })),
-            },
-          },
-        });
-        return id;
-      },
+      (tx) =>
+        this.record(tx, schema, {
+          movementTypeId: type.id,
+          registeredById: auth.user.id,
+          warehouse,
+          lines,
+          allowNegative: settings?.allowNegativeStock ?? false,
+          departmentId: dto.departmentId ?? null,
+          documentRef: dto.documentRef || null,
+          notes: dto.notes || null,
+        }),
       { timeout: 20_000 },
     );
 
+    return this.getById(tenant, id);
+  }
+
+  /** Reads one movement as a DTO, without access checks. */
+  async getById(tenant: Tx, id: number): Promise<MovementDto> {
     const movement = await tenant.movement.findUniqueOrThrow({
       where: { id },
       include: movementInclude,
@@ -346,39 +329,83 @@ export class MovementsService {
     return result;
   }
 
+  /**
+   * Records a confirmed movement inside the caller's transaction: updates stock
+   * balances and average costs, re-evaluates the stock alerts it affects (CU-12a)
+   * and returns the new movement's id. Lock the products' rows through it only.
+   */
+  async record(tx: Tx, schema: string, input: MovementRecord): Promise<number> {
+    const { resolved, productWarehouseIds } = await this.applyLines(
+      tx,
+      schema,
+      input,
+    );
+    // The products' rows are locked, so alerts cannot race.
+    await evaluateAlerts(tx, productWarehouseIds);
+    const [{ id }] = await tx.$queryRawUnsafe<{ id: number }[]>(
+      `SELECT nextval(pg_get_serial_sequence('"${schema}"."movements"', 'id'))::int AS "id"`,
+    );
+    await tx.movement.create({
+      data: {
+        id,
+        number: movementNumber(id),
+        movementTypeId: input.movementTypeId,
+        registeredById: input.registeredById,
+        departmentId: input.departmentId ?? null,
+        stockRequestId: input.stockRequestId ?? null,
+        status: 'CONFIRMED',
+        documentRef: input.documentRef ?? null,
+        notes: input.notes ?? null,
+        lines: {
+          create: resolved.map((line) => ({
+            lineNumber: line.lineNumber,
+            productId: line.productId,
+            originLocationId: line.effect === 'OUT' ? line.locationId : null,
+            destinationLocationId:
+              line.effect === 'IN' ? line.locationId : null,
+            lotId: line.lotId,
+            quantity: line.quantity,
+            unitCost: line.unitCost,
+          })),
+        },
+      },
+    });
+    return id;
+  }
+
   private tenant(auth: AuthContext) {
     return this.tenants.client(auth.organization.schemaName);
   }
 
   /** Validates the lines against the catalog and the warehouse's locations. */
-  private async planLines(
+  async planLines(
     tenant: Tx,
     warehouseId: number,
     nature: 'INBOUND' | 'OUTBOUND' | 'ADJUSTMENT',
-    dto: CreateMovementDto,
+    inputLines: MovementLineInputDto[],
   ): Promise<PlannedLine[]> {
-    const productIds = [...new Set(dto.lines.map((l) => l.productId))];
+    const productIds = [...new Set(inputLines.map((l) => l.productId))];
     const locationIds = [
       ...new Set(
-        dto.lines.flatMap((l) => (l.locationId ? [l.locationId] : [])),
+        inputLines.flatMap((l) => (l.locationId ? [l.locationId] : [])),
       ),
     ];
-    const [products, locations] = await Promise.all([
-      tenant.product.findMany({
-        where: { id: { in: productIds }, isActive: true },
-        select: { id: true, sku: true, tracksLots: true },
-      }),
+    // Sequential: stock requests call this inside a transaction (one connection).
+    const products = await tenant.product.findMany({
+      where: { id: { in: productIds }, isActive: true },
+      select: { id: true, sku: true, tracksLots: true },
+    });
+    const locations =
       locationIds.length === 0
         ? []
-        : tenant.location.findMany({
+        : await tenant.location.findMany({
             where: { id: { in: locationIds }, warehouseId, isActive: true },
             select: { id: true },
-          }),
-    ]);
+          });
     const productById = new Map(products.map((p) => [p.id, p]));
     const validLocations = new Set(locations.map((l) => l.id));
 
-    return dto.lines.map((line, index) => {
+    return inputLines.map((line, index) => {
       const lineNumber = index + 1;
       const product = productById.get(line.productId);
       if (!product) throw movementErrors.productInvalid(lineNumber);
@@ -415,11 +442,7 @@ export class MovementsService {
   private async applyLines(
     tx: Tx,
     schema: string,
-    input: {
-      warehouse: { id: number; defaultLocationId: number | null };
-      lines: PlannedLine[];
-      allowNegative: boolean;
-    },
+    input: Pick<MovementRecord, 'warehouse' | 'lines' | 'allowNegative'>,
   ) {
     const { warehouse, lines, allowNegative } = input;
     const productIds = [...new Set(lines.map((l) => l.product.id))].sort(
