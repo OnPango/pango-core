@@ -43,7 +43,7 @@ Request body:
 - The movement number is `MV-` plus its id padded to 8 digits. Ids come from the table's sequence, so failed registrations leave gaps.
 - The product must be active (`400 PRODUCT_INVALID`), the warehouse active (`400 WAREHOUSE_INVALID`), the department active (`400 DEPARTMENT_INVALID`).
 - `source` in responses is `MANUAL`, or `STOCK_REQUEST` for movements that fulfil a stock request (CU-09, [`stock-requests.md`](stock-requests.md)); their `department` is the requesting one.
-- Existing stock per warehouse (US-15) is in `GET /products/:id`.
+- Existing stock per warehouse (US-15) is in `GET /products/:id`; stock of a warehouse, by location and lot, and the lots of a product are in [`stock.md`](stock.md).
 - Each movement re-evaluates the stock alerts of its products in the warehouse, in the same transaction (CU-12a, [`replenishment.md`](replenishment.md)).
 
 ## Not done yet

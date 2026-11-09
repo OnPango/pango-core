@@ -27,6 +27,8 @@ The `dev` branch currently provides:
 - **Warehouses and stores** with a default location created automatically.
 - **Inventory movements**: inbound, outbound and adjustments, confirmed at once,
   with stock balances, lots and weighted average cost.
+- **Stock queries**: stock per warehouse, by location and lot, and lots with
+  their expiry dates.
 - **Replenishment**: safety stock and reorder point per product and warehouse,
   and stock alerts raised and resolved automatically.
 - **Departments and internal stock requests**, with reservations, a status
@@ -35,7 +37,7 @@ The `dev` branch currently provides:
 - A database model prepared for suppliers, transfers, locations, forecasting
   and notifications.
 
-Catalog, warehouse, movement, replenishment, alert, department and stock request
+Catalog, warehouse, movement, stock, replenishment, alert, department and stock request
 endpoints are implemented today (details in `docs/`). Transfers, drafts and
 voiding of movements, location management, forecasting and notifications are
 represented in the tenant schema but their API modules are still planned.
