@@ -3,6 +3,11 @@ import type { AuthContext } from '../auth/auth-context.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
 import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
+import { assertTenantSchema } from '../prisma/tenant-schema.js';
+import {
+  evaluateAlerts,
+  lockAlertScope,
+} from '../replenishment/evaluate-alerts.js';
 import { catalogErrors } from './catalog-errors.js';
 import {
   CatalogStatusFilter,
@@ -227,12 +232,24 @@ export class ProductsService {
       if (dto[field] !== undefined) data[field] = dto[field];
     }
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
+    const statusChanged =
+      dto.isActive !== undefined && dto.isActive !== product.isActive;
+    const schema = assertTenantSchema(auth.organization.schemaName);
 
     try {
-      const updated = await tenant.product.update({
-        where: { id },
-        data,
-        include: productInclude,
+      const updated = await tenant.$transaction(async (tx) => {
+        // Archiving resolves the product's open alerts (INACTIVE) and
+        // reactivating may raise them again: evaluate them like a movement does.
+        const scope = statusChanged
+          ? await lockAlertScope(tx, schema, { productId: id })
+          : [];
+        const row = await tx.product.update({
+          where: { id },
+          data,
+          include: productInclude,
+        });
+        await evaluateAlerts(tx, scope);
+        return row;
       });
       return toDto(updated);
     } catch (error) {

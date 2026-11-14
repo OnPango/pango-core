@@ -3,7 +3,15 @@ import type { AuthContext } from '../auth/auth-context.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { CatalogStatusFilter } from './dto.js';
+import { evaluateAlerts } from '../replenishment/evaluate-alerts.js';
 import { categorySubtree, ProductsService } from './products.service.js';
+
+vi.mock('../replenishment/evaluate-alerts.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../replenishment/evaluate-alerts.js')
+  >()),
+  evaluateAlerts: vi.fn(),
+}));
 
 const auth = {
   organization: { schemaName: 'tenant_demo' },
@@ -59,7 +67,14 @@ function setup() {
     unitOfMeasure: { findUnique: vi.fn().mockResolvedValue({ id: 1 }) },
     movementLine: { findFirst: vi.fn().mockResolvedValue(null) },
     lot: { count: vi.fn().mockResolvedValue(0) },
+    productWarehouse: { findMany: vi.fn().mockResolvedValue([]) },
+    $queryRawUnsafe: vi.fn(),
+    $transaction: vi.fn(),
   };
+  tenant.$transaction.mockImplementation((fn: (tx: unknown) => unknown) =>
+    fn(tenant),
+  );
+  vi.mocked(evaluateAlerts).mockClear();
   const service = new ProductsService({
     client: () => tenant,
   } as unknown as TenantPrismaService);
@@ -240,6 +255,34 @@ describe('ProductsService.update', () => {
     expect(await errorCode(service.update(auth, 1, { tracksLots: true }))).toBe(
       'TRACKS_LOTS_LOCKED',
     );
+  });
+
+  it('archiving locks the product and evaluates its alerts in every warehouse', async () => {
+    const { tenant, service } = setup();
+    tenant.product.findUnique.mockResolvedValue(product());
+    tenant.productWarehouse.findMany.mockResolvedValue([
+      { id: 9, productId: 1 },
+      { id: 12, productId: 1 },
+    ]);
+    await service.update(auth, 1, { isActive: false });
+    expect(tenant.productWarehouse.findMany.mock.calls[0]?.[0].where).toEqual({
+      productId: 1,
+    });
+    expect(tenant.$queryRawUnsafe.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(tenant.$queryRawUnsafe.mock.calls[0]?.[1]).toEqual([1]);
+    expect(evaluateAlerts).toHaveBeenCalledWith(tenant, [9, 12]);
+    // The product is written before its alerts are evaluated.
+    expect(tenant.product.update.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(evaluateAlerts).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('does not touch alerts when the status does not change', async () => {
+    const { tenant, service } = setup();
+    tenant.product.findUnique.mockResolvedValue(product());
+    await service.update(auth, 1, { name: 'Hex bolt', isActive: true });
+    expect(tenant.$queryRawUnsafe).not.toHaveBeenCalled();
+    expect(evaluateAlerts).toHaveBeenCalledWith(tenant, []);
   });
 
   it('deactivates and clears measures', async () => {

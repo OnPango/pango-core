@@ -78,6 +78,7 @@ const storedAlert = {
   suggestedQuantity: D(42),
   message: 'TOR-001: available stock 8 EA is at or below the reorder point 10',
   createdAt: new Date('2026-11-07'),
+  updatedAt: new Date('2026-11-07'),
   resolvedAt: null,
   productWarehouse: { product, warehouse: north },
 };

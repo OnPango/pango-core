@@ -8,6 +8,11 @@ import { apiError } from '../auth/auth-errors.js';
 import type { Prisma } from '../generated/prisma/tenant/client.js';
 import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
+import { assertTenantSchema } from '../prisma/tenant-schema.js';
+import {
+  evaluateAlerts,
+  lockAlertScope,
+} from '../replenishment/evaluate-alerts.js';
 import {
   type CreateWarehouseDto,
   type ListWarehousesQueryDto,
@@ -178,12 +183,24 @@ export class WarehousesService {
       }
       data.isActive = dto.isActive;
     }
+    const statusChanged = data.isActive !== undefined;
+    const schema = assertTenantSchema(auth.organization.schemaName);
 
     try {
-      const updated = await tenant.warehouse.update({
-        where: { id },
-        data,
-        include: warehouseInclude,
+      const updated = await tenant.$transaction(async (tx) => {
+        // Closing resolves the open alerts of its products there (INACTIVE):
+        // without stock or movements nothing would evaluate them again.
+        // Reopening may raise them again.
+        const scope = statusChanged
+          ? await lockAlertScope(tx, schema, { warehouseId: id })
+          : [];
+        const row = await tx.warehouse.update({
+          where: { id },
+          data,
+          include: warehouseInclude,
+        });
+        await evaluateAlerts(tx, scope);
+        return row;
       });
       return toDto(updated);
     } catch (error) {

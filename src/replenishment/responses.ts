@@ -14,8 +14,13 @@ export class OpenAlertRefDto {
   @ApiProperty({ example: 2, description: '1 = lowest, 3 = nothing available' })
   severity: number;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'When the alert was raised' })
   createdAt: Date;
+
+  @ApiProperty({
+    description: 'Last time its values changed (e.g. severity raised)',
+  })
+  updatedAt: Date;
 }
 
 export class ReplenishmentDto {
@@ -99,13 +104,14 @@ export class AlertDto {
 
   @ApiProperty({
     example: 8,
-    description: 'Available stock when the alert was raised',
+    description:
+      'Available stock at the last evaluation while open; frozen once resolved',
   })
   availableQuantity: number;
 
   @ApiProperty({
     example: 30,
-    description: 'Reorder point the stock was compared against',
+    description: 'Reorder point the stock was last compared against',
   })
   reorderPoint: number;
 
@@ -119,7 +125,7 @@ export class AlertDto {
     example: 112,
     description:
       'Quantity that brings available stock up to the max stock (or the reorder ' +
-      'point when there is none), when the alert was raised',
+      'point when there is none), as of the last evaluation while open',
   })
   suggestedQuantity: number;
 
@@ -129,11 +135,44 @@ export class AlertDto {
   })
   message: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description: 'When the alert was raised; refreshing it does not change it',
+  })
   createdAt: Date;
+
+  @ApiProperty({
+    description:
+      'Last change: values refreshed while open (e.g. severity raised to 3) ' +
+      'or resolution. Equals `createdAt` until then',
+  })
+  updatedAt: Date;
 
   @ApiProperty({ type: Date, nullable: true })
   resolvedAt: Date | null;
+
+  @ApiProperty({
+    enum: [
+      'STOCK_RECOVERED',
+      'REORDER_POINT_CHANGED',
+      'NO_REORDER_POINT',
+      'INACTIVE',
+    ],
+    enumName: 'AlertResolution',
+    nullable: true,
+    description:
+      'Why it was resolved: available stock rose above the reorder point, the ' +
+      'reorder point was lowered below it or removed, or the product, its ' +
+      'product-warehouse or the warehouse was deactivated. Null while open and ' +
+      'for alerts resolved before reasons were recorded. A resolved alert keeps ' +
+      'the values of its last evaluation, so with `REORDER_POINT_CHANGED` they ' +
+      'still read below the reorder point',
+  })
+  resolution:
+    | 'STOCK_RECOVERED'
+    | 'REORDER_POINT_CHANGED'
+    | 'NO_REORDER_POINT'
+    | 'INACTIVE'
+    | null;
 }
 
 export class AlertPageDto {
