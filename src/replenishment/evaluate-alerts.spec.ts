@@ -24,12 +24,35 @@ function productWarehouse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Open alert raised in medium severity with 8 available (reorder point 10). */
+function openAlertRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 7,
+    productWarehouseId: 9,
+    severity: 1,
+    suggestedQuantity: D(42),
+    availableQuantity: D(8),
+    reorderPoint: D(10),
+    reorderPointSource: 'MANUAL',
+    message:
+      'TOR-001: available stock 8 EA is at or below the reorder point 10',
+    ...overrides,
+  };
+}
+
 function setup(options: {
   onHand: number;
   reserved?: number;
   pw?: Record<string, unknown>;
   openAlertId?: number;
+  openAlert?: Record<string, unknown>;
 }) {
+  const open =
+    options.openAlert !== undefined
+      ? [openAlertRow(options.openAlert)]
+      : options.openAlertId !== undefined
+        ? [openAlertRow({ id: options.openAlertId })]
+        : [];
   const tx = {
     productWarehouse: {
       findMany: vi.fn().mockResolvedValue([productWarehouse(options.pw)]),
@@ -55,14 +78,9 @@ function setup(options: {
       ),
     },
     alert: {
-      findMany: vi
-        .fn()
-        .mockResolvedValue(
-          options.openAlertId === undefined
-            ? []
-            : [{ id: options.openAlertId, productWarehouseId: 9 }],
-        ),
+      findMany: vi.fn().mockResolvedValue(open),
       create: vi.fn(),
+      update: vi.fn(),
       updateMany: vi.fn(),
     },
   };
@@ -122,12 +140,93 @@ describe('evaluateAlerts', () => {
     expect(tx.alert.updateMany).not.toHaveBeenCalled();
   });
 
+  it('raises an open medium alert to critical when nothing is available', async () => {
+    const tx = setup({ onHand: 0, openAlert: {} });
+    await evaluateAlerts(tx as unknown as Tx, [9], now);
+    expect(tx.alert.create).not.toHaveBeenCalled();
+    expect(tx.alert.updateMany).not.toHaveBeenCalled();
+    expect(tx.alert.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: {
+        severity: 3,
+        availableQuantity: D(0),
+        suggestedQuantity: D(50),
+        reorderPoint: D(10),
+        reorderPointSource: 'MANUAL',
+        message:
+          'TOR-001: available stock 0 EA is at or below the reorder point 10',
+        updatedAt: now,
+      },
+    });
+    // `createdAt` keeps the date the alert was raised.
+    expect(tx.alert.update.mock.calls[0][0].data).not.toHaveProperty(
+      'createdAt',
+    );
+  });
+
+  it('lowers the severity when stock comes in but stays below the reorder point', async () => {
+    const tx = setup({
+      onHand: 7,
+      openAlert: {
+        severity: 3,
+        availableQuantity: D(0),
+        suggestedQuantity: D(50),
+        message:
+          'TOR-001: available stock 0 EA is at or below the reorder point 10',
+      },
+    });
+    await evaluateAlerts(tx as unknown as Tx, [9], now);
+    expect(tx.alert.create).not.toHaveBeenCalled();
+    expect(tx.alert.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: expect.objectContaining({
+        severity: 1,
+        availableQuantity: D(7),
+        suggestedQuantity: D(43),
+      }),
+    });
+
+    const high = setup({ onHand: 4, openAlert: {} });
+    await evaluateAlerts(high as unknown as Tx, [9], now);
+    expect(high.alert.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: expect.objectContaining({ severity: 2 }),
+    });
+  });
+
+  it('follows a changed reorder point while the alert stays open', async () => {
+    const tx = setup({
+      onHand: 8,
+      pw: { reorderPoint: D(20), valueSource: 'CALCULATED' },
+      openAlert: {},
+    });
+    await evaluateAlerts(tx as unknown as Tx, [9], now);
+    expect(tx.alert.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: expect.objectContaining({
+        reorderPoint: D(20),
+        reorderPointSource: 'CALCULATED',
+        message:
+          'TOR-001: available stock 8 EA is at or below the reorder point 20',
+      }),
+    });
+  });
+
+  it('leaves an open alert untouched when nothing changed', async () => {
+    const tx = setup({ onHand: 8, openAlert: {} });
+    await evaluateAlerts(tx as unknown as Tx, [9], now);
+    expect(tx.alert.create).not.toHaveBeenCalled();
+    expect(tx.alert.update).not.toHaveBeenCalled();
+    expect(tx.alert.updateMany).not.toHaveBeenCalled();
+  });
+
   it('resolves the open alert once available stock is above the reorder point', async () => {
     const tx = setup({ onHand: 11, openAlertId: 7 });
     await evaluateAlerts(tx as unknown as Tx, [9], now);
+    expect(tx.alert.update).not.toHaveBeenCalled();
     expect(tx.alert.updateMany).toHaveBeenCalledWith({
       where: { id: { in: [7] }, status: 'OPEN' },
-      data: { status: 'RESOLVED', resolvedAt: now },
+      data: { status: 'RESOLVED', resolvedAt: now, updatedAt: now },
     });
   });
 

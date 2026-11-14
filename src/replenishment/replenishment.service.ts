@@ -57,6 +57,7 @@ function toAlertDto(alert: AlertWithRefs): AlertDto {
     suggestedQuantity: alert.suggestedQuantity.toNumber(),
     message: alert.message,
     createdAt: alert.createdAt,
+    updatedAt: alert.updatedAt,
     resolvedAt: alert.resolvedAt,
   };
 }
@@ -231,7 +232,12 @@ export class ReplenishmentService {
         include: {
           alerts: {
             where: { type: 'BELOW_ROP', status: 'OPEN' },
-            select: { id: true, severity: true, createdAt: true },
+            select: {
+              id: true,
+              severity: true,
+              createdAt: true,
+              updatedAt: true,
+            },
           },
         },
       }),

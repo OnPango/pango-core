@@ -97,8 +97,11 @@ export async function stockLevels(
 /**
  * CU-12a: compares available stock with the reorder point of each
  * product-warehouse. Opens a `BELOW_ROP` alert when available ≤ reorder point and
- * none is open; resolves the open one when available rises above it, or when the
- * product-warehouse no longer has a reorder point. A reorder point of 0 means none.
+ * none is open; while it stays below, refreshes the open one (severity, available
+ * stock, suggested quantity, reorder point and message) without touching
+ * `createdAt`; resolves it when available rises above the reorder point, or when
+ * the product-warehouse no longer has a reorder point. A reorder point of 0 means
+ * none.
  *
  * Runs inside the caller's transaction, which must hold the products' row locks
  * so two evaluations of the same product never race.
@@ -136,9 +139,18 @@ export async function evaluateAlerts(
       type: 'BELOW_ROP',
       status: 'OPEN',
     },
-    select: { id: true, productWarehouseId: true },
+    select: {
+      id: true,
+      productWarehouseId: true,
+      severity: true,
+      suggestedQuantity: true,
+      availableQuantity: true,
+      reorderPoint: true,
+      reorderPointSource: true,
+      message: true,
+    },
   });
-  const openAlert = new Map(open.map((a) => [a.productWarehouseId, a.id]));
+  const openAlert = new Map(open.map((a) => [a.productWarehouseId, a]));
 
   const toResolve: number[] = [];
   for (const pw of productWarehouses) {
@@ -148,37 +160,71 @@ export async function evaluateAlerts(
       pw.product.isActive &&
       pw.reorderPoint.gt(0) &&
       available.lte(pw.reorderPoint);
-    const openId = openAlert.get(pw.id);
+    const current = openAlert.get(pw.id);
 
-    if (below && openId === undefined) {
-      await tx.alert.create({
-        data: {
-          productWarehouseId: pw.id,
-          type: 'BELOW_ROP',
-          severity: alertSeverity(available, pw.safetyStock),
-          suggestedQuantity: suggestedQuantity(
-            available,
-            pw.reorderPoint,
-            pw.maxStock,
-          ),
-          availableQuantity: available,
-          reorderPoint: pw.reorderPoint,
-          reorderPointSource: pw.valueSource,
-          message:
-            `${pw.product.sku}: available stock ${available.toString()} ` +
-            `${pw.product.stockUnit.code} is at or below the reorder point ` +
-            `${pw.reorderPoint.toString()}`,
-          createdAt: now,
-        },
-      });
-    } else if (!below && openId !== undefined) {
-      toResolve.push(openId);
+    if (below) {
+      const values = {
+        severity: alertSeverity(available, pw.safetyStock),
+        suggestedQuantity: suggestedQuantity(
+          available,
+          pw.reorderPoint,
+          pw.maxStock,
+        ),
+        availableQuantity: available,
+        reorderPoint: pw.reorderPoint,
+        reorderPointSource: pw.valueSource,
+        message:
+          `${pw.product.sku}: available stock ${available.toString()} ` +
+          `${pw.product.stockUnit.code} is at or below the reorder point ` +
+          `${pw.reorderPoint.toString()}`,
+      };
+      if (current === undefined) {
+        await tx.alert.create({
+          data: {
+            productWarehouseId: pw.id,
+            type: 'BELOW_ROP',
+            ...values,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      } else if (!sameValues(current, values)) {
+        // Still below with an alert open: never a second one (RF-ALT-001), but
+        // keep what it shows current. `createdAt` stays when it was raised.
+        await tx.alert.update({
+          where: { id: current.id },
+          data: { ...values, updatedAt: now },
+        });
+      }
+    } else if (current !== undefined) {
+      toResolve.push(current.id);
     }
   }
   if (toResolve.length > 0) {
     await tx.alert.updateMany({
       where: { id: { in: toResolve }, status: 'OPEN' },
-      data: { status: 'RESOLVED', resolvedAt: now },
+      data: { status: 'RESOLVED', resolvedAt: now, updatedAt: now },
     });
   }
+}
+
+interface AlertValues {
+  severity: number;
+  suggestedQuantity: Decimal;
+  availableQuantity: Decimal;
+  reorderPoint: Decimal;
+  reorderPointSource: string;
+  message: string;
+}
+
+/** Whether an open alert already shows these values (no write needed). */
+function sameValues(stored: AlertValues, next: AlertValues): boolean {
+  return (
+    stored.severity === next.severity &&
+    stored.suggestedQuantity.eq(next.suggestedQuantity) &&
+    stored.availableQuantity.eq(next.availableQuantity) &&
+    stored.reorderPoint.eq(next.reorderPoint) &&
+    stored.reorderPointSource === next.reorderPointSource &&
+    stored.message === next.message
+  );
 }

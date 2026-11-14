@@ -115,7 +115,7 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 | `forecast_runs` | One execution of the forecasting service. |
 | `forecasts` | Forecast per product-warehouse and run: model, demand class, error metric. One is current per product-warehouse. |
 | `forecast_periods` | Estimated demand and bounds per period. |
-| `alerts` | Stock alerts (`BELOW_ROP`, `STOCKOUT`, `OVERSTOCK`) with the available stock and reorder point they were raised with, optionally linked to a draft replenishment movement. |
+| `alerts` | Stock alerts (`BELOW_ROP`, `STOCKOUT`, `OVERSTOCK`) with the available stock and reorder point of the last evaluation (refreshed while open, `updated_at`), optionally linked to a draft replenishment movement. |
 | `notifications` | Delivery of an alert to a user through a channel. |
 
 ### Constraints in hand-written SQL
@@ -191,7 +191,7 @@ These span several tables, so a `CHECK` cannot express them:
   - Starting the attention (`IN_PROGRESS`) reserves the full requested quantity of every line (`reserved_quantity`), only if the warehouse's available stock covers it (no partial attention, RN-016).
   - The movement that fulfils it releases the reservation; rejecting releases it too.
   - When `reservation_expires_at` is set, the reservation is released automatically after it. `settings.reservation_expiry_days` proposes the default.
-- **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Reaching it opens a `BELOW_ROP` alert; rising above it again resolves the alert (`RESOLVED`, `resolved_at`). A reorder point of 0 means none. Planned: the alert also creates a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`, and confirming it resolves the alert. Details in [`replenishment.md`](replenishment.md).
+- **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Reaching it opens a `BELOW_ROP` alert; while it stays below, each evaluation refreshes the open alert's severity, available stock, suggested quantity and reorder point (`updated_at`, `alert_updated_at` migration) instead of opening another; rising above it again resolves the alert (`RESOLVED`, `resolved_at`). A reorder point of 0 means none. Planned: the alert also creates a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`, and confirming it resolves the alert. Details in [`replenishment.md`](replenishment.md).
 - **Demand history** (forecast input): `CONFIRMED` outbound movements whose type has `counts_as_demand = true`: sales ("Sales issue", the demand of a point of sale) and internal consumption. Movements of the stock request type (`settings.stock_request_movement_type_id`, "Consumption issue") count only when they fulfil a stock request (`stock_request_id` set), so consumption is always traceable to a department (RN-008, extended to sales).
 
 ### Views (planned)

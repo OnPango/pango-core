@@ -852,13 +852,17 @@ model Alert {
   severity           Int         @default(1) @db.SmallInt
   status             AlertStatus @default(OPEN)
   suggestedQuantity  Decimal     @default(0) @map("suggested_quantity") @db.Decimal(14, 4)
-  /// Available stock (on hand − reserved) when the alert was raised.
+  /// Available stock (on hand − reserved) at the last evaluation while open;
+  /// frozen once the alert is resolved.
   availableQuantity  Decimal     @map("available_quantity") @db.Decimal(14, 4)
   /// Reorder point the stock was compared against, and whether it was set by hand.
   reorderPoint       Decimal     @map("reorder_point") @db.Decimal(14, 4)
   reorderPointSource ValueSource @map("reorder_point_source")
   message            String
+  /// When the alert was raised; refreshing an open alert does not change it.
   createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  /// Last change: values refreshed while open (e.g. severity raised) or resolution.
+  updatedAt          DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
   resolvedAt         DateTime?   @map("resolved_at") @db.Timestamptz
 
   productWarehouse ProductWarehouse @relation(fields: [productWarehouseId], references: [id], onDelete: Restrict)
