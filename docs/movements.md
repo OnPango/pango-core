@@ -33,6 +33,10 @@ Request body:
 - `direction` (`INCREASE` / `DECREASE`) is required on `ADJUSTMENT` types and rejected on the others.
 - `unitCost` applies only when stock is added. It updates the product's weighted average cost (`products.average_cost`, across every warehouse). Without it, the line takes the current average cost. Lines that remove stock always take the current average cost.
 
+## Movement types
+
+`GET /movement-types` lists them. Every organization starts with the base types (`isBase`): "Opening balance" and "Purchase receipt" (`INBOUND`), "Consumption issue" and "Sales issue" (`OUTBOUND`), "Transfer" (`TRANSFER`, not supported yet) and "Inventory adjustment" (`ADJUSTMENT`). Register sales from a store or warehouse with "Sales issue" and the invoice in `documentRef`. It counts as demand (`countsAsDemand`), like the consumption that fulfils a stock request ([`database.md`](database.md), demand history).
+
 ## Rules
 
 - A movement is registered `CONFIRMED`. The movement, its lines and the stock balances change in one transaction, and a movement is never edited or deleted (RN-006). Mistakes are corrected with an adjustment.
