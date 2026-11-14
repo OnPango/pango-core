@@ -156,8 +156,11 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
   | Opening balance | INBOUND | no |
   | Purchase receipt | INBOUND | no |
   | Consumption issue | OUTBOUND | yes |
+  | Sales issue | OUTBOUND | yes |
   | Transfer | TRANSFER | no |
   | Inventory adjustment | ADJUSTMENT | no |
+
+  "Sales issue" comes from the `sales_issue_movement_type` migration, which also allows it to Owner, Admin and Operator.
 
 - **`units_of_measure`**: `EA` (Each); `catalog_fields` adds `KGM`, `GRM`, `LTR`, `MLT`, `MTR`, `BX`, `PK`.
 - **`roles`**: `Owner` (`is_system = true`) with every permission and every movement type.
@@ -189,7 +192,7 @@ These span several tables, so a `CHECK` cannot express them:
   - The movement that fulfils it releases the reservation; rejecting releases it too.
   - When `reservation_expires_at` is set, the reservation is released automatically after it. `settings.reservation_expiry_days` proposes the default.
 - **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Reaching it opens a `BELOW_ROP` alert; rising above it again resolves the alert (`RESOLVED`, `resolved_at`). A reorder point of 0 means none. Planned: the alert also creates a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`, and confirming it resolves the alert. Details in [`replenishment.md`](replenishment.md).
-- **Demand history** (forecast input): only `CONFIRMED` outbound movements whose type has `counts_as_demand = true`.
+- **Demand history** (forecast input): `CONFIRMED` outbound movements whose type has `counts_as_demand = true`: sales ("Sales issue", the demand of a point of sale) and internal consumption. Movements of the stock request type (`settings.stock_request_movement_type_id`, "Consumption issue") count only when they fulfil a stock request (`stock_request_id` set), so consumption is always traceable to a department (RN-008, extended to sales).
 
 ### Views (planned)
 
