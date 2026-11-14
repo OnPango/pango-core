@@ -1,4 +1,7 @@
-import { Prisma } from '../generated/prisma/tenant/client.js';
+import {
+  type AlertResolution,
+  Prisma,
+} from '../generated/prisma/tenant/client.js';
 
 type Tx = Prisma.TransactionClient;
 type Decimal = Prisma.Decimal;
@@ -130,6 +133,7 @@ export async function evaluateAlerts(
           stockUnit: { select: { code: true } },
         },
       },
+      warehouse: { select: { isActive: true } },
     },
   });
   const levels = await stockLevels(tx, productWarehouses, now);
@@ -152,14 +156,12 @@ export async function evaluateAlerts(
   });
   const openAlert = new Map(open.map((a) => [a.productWarehouseId, a]));
 
-  const toResolve: number[] = [];
+  const toResolve = new Map<AlertResolution, number[]>();
   for (const pw of productWarehouses) {
     const { available } = levels.get(pw.id)!;
+    const active = pw.isActive && pw.product.isActive && pw.warehouse.isActive;
     const below =
-      pw.isActive &&
-      pw.product.isActive &&
-      pw.reorderPoint.gt(0) &&
-      available.lte(pw.reorderPoint);
+      active && pw.reorderPoint.gt(0) && available.lte(pw.reorderPoint);
     const current = openAlert.get(pw.id);
 
     if (below) {
@@ -197,15 +199,36 @@ export async function evaluateAlerts(
         });
       }
     } else if (current !== undefined) {
-      toResolve.push(current.id);
+      const reason = resolutionOf(active, pw.reorderPoint, available, current);
+      toResolve.set(reason, [...(toResolve.get(reason) ?? []), current.id]);
     }
   }
-  if (toResolve.length > 0) {
+  for (const [resolution, ids] of toResolve) {
     await tx.alert.updateMany({
-      where: { id: { in: toResolve }, status: 'OPEN' },
-      data: { status: 'RESOLVED', resolvedAt: now, updatedAt: now },
+      where: { id: { in: ids }, status: 'OPEN' },
+      data: { status: 'RESOLVED', resolution, resolvedAt: now, updatedAt: now },
     });
   }
+}
+
+/**
+ * Why an open alert no longer applies. The alert keeps the values of its last
+ * evaluation, so this is what explains a resolved alert that still reads "below
+ * the reorder point": the point it was compared against changed, not the stock.
+ */
+export function resolutionOf(
+  active: boolean,
+  reorderPoint: Decimal,
+  available: Decimal,
+  alert: { reorderPoint: Decimal },
+): AlertResolution {
+  if (!active) return 'INACTIVE';
+  if (reorderPoint.lte(0)) return 'NO_REORDER_POINT';
+  // Above the point the alert last showed: the stock came back. Otherwise only
+  // a lower reorder point explains it.
+  return available.gt(alert.reorderPoint)
+    ? 'STOCK_RECOVERED'
+    : 'REORDER_POINT_CHANGED';
 }
 
 interface AlertValues {
@@ -227,4 +250,31 @@ function sameValues(stored: AlertValues, next: AlertValues): boolean {
     stored.reorderPointSource === next.reorderPointSource &&
     stored.message === next.message
   );
+}
+
+/**
+ * For changes that switch alerts on or off for many product-warehouses at once
+ * (archiving a product, closing a warehouse): locks the rows of their products,
+ * in id order like movements do, and returns the product-warehouse ids to pass
+ * to `evaluateAlerts` once the change is written in the same transaction.
+ */
+export async function lockAlertScope(
+  tx: Tx,
+  schema: string,
+  where: { productId: number } | { warehouseId: number },
+): Promise<number[]> {
+  const productWarehouses = await tx.productWarehouse.findMany({
+    where,
+    select: { id: true, productId: true },
+  });
+  if (productWarehouses.length === 0) return [];
+  const productIds = [
+    ...new Set(productWarehouses.map((pw) => pw.productId)),
+  ].sort((a, b) => a - b);
+  await tx.$queryRawUnsafe(
+    `SELECT "id" FROM "${schema}"."products"
+      WHERE "id" = ANY($1::int[]) ORDER BY "id" FOR UPDATE`,
+    productIds,
+  );
+  return productWarehouses.map((pw) => pw.id);
 }

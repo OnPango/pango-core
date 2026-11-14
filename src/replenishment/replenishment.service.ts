@@ -8,7 +8,11 @@ import { authErrors } from '../auth/auth-errors.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
-import type { ListAlertsQueryDto, SetReplenishmentDto } from './dto.js';
+import {
+  AlertSort,
+  type ListAlertsQueryDto,
+  type SetReplenishmentDto,
+} from './dto.js';
 import { evaluateAlerts, stockLevels } from './evaluate-alerts.js';
 import { replenishmentErrors } from './replenishment-errors.js';
 import type { AlertDto, AlertPageDto, ReplenishmentDto } from './responses.js';
@@ -37,6 +41,17 @@ const alertInclude = {
 
 type AlertWithRefs = Prisma.AlertGetPayload<{ include: typeof alertInclude }>;
 
+/** `GET /alerts?sort=`; `id` breaks ties so pages never overlap. */
+const alertOrder: Record<AlertSort, Prisma.AlertOrderByWithRelationInput[]> = {
+  [AlertSort.CREATED]: [{ createdAt: 'desc' }, { id: 'desc' }],
+  [AlertSort.UPDATED]: [{ updatedAt: 'desc' }, { id: 'desc' }],
+  [AlertSort.SEVERITY]: [
+    { severity: 'desc' },
+    { updatedAt: 'desc' },
+    { id: 'desc' },
+  ],
+};
+
 function toAlertDto(alert: AlertWithRefs): AlertDto {
   const { product, warehouse } = alert.productWarehouse;
   return {
@@ -59,6 +74,7 @@ function toAlertDto(alert: AlertWithRefs): AlertDto {
     createdAt: alert.createdAt,
     updatedAt: alert.updatedAt,
     resolvedAt: alert.resolvedAt,
+    resolution: alert.resolution,
   };
 }
 
@@ -167,7 +183,7 @@ export class ReplenishmentService {
       tenant.alert.findMany({
         where,
         include: alertInclude,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: alertOrder[query.sort ?? AlertSort.CREATED],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),

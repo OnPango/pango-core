@@ -5,7 +5,15 @@ import {
   warehousesWithPermission,
 } from '../auth/auth-context.js';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
+import { evaluateAlerts } from '../replenishment/evaluate-alerts.js';
 import { WarehousesService } from './warehouses.service.js';
+
+vi.mock('../replenishment/evaluate-alerts.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../replenishment/evaluate-alerts.js')
+  >()),
+  evaluateAlerts: vi.fn(),
+}));
 
 function role(
   permissions: string[],
@@ -65,8 +73,11 @@ function setup() {
     },
     location: { create: vi.fn().mockResolvedValue({ id: 7 }) },
     stockBalance: { findFirst: vi.fn().mockResolvedValue(null) },
+    productWarehouse: { findMany: vi.fn().mockResolvedValue([]) },
+    $queryRawUnsafe: vi.fn(),
     $transaction: vi.fn(),
   };
+  vi.mocked(evaluateAlerts).mockClear();
   tenant.$transaction.mockImplementation((fn: (tx: unknown) => unknown) =>
     fn(tenant),
   );
@@ -191,6 +202,24 @@ describe('WarehousesService.update', () => {
     expect(
       await errorCode(service.update(manager, 1, { isActive: false })),
     ).toBe('WAREHOUSE_HAS_STOCK');
+  });
+
+  it('closing evaluates the alerts of its products there, with their rows locked', async () => {
+    const { tenant, service } = setup();
+    tenant.productWarehouse.findMany.mockResolvedValue([
+      { id: 4, productId: 7 },
+      { id: 5, productId: 2 },
+    ]);
+    await service.update(manager, 1, { isActive: false });
+    expect(tenant.productWarehouse.findMany.mock.calls[0]?.[0].where).toEqual({
+      warehouseId: 1,
+    });
+    // Same lock order as movements: by product id.
+    expect(tenant.$queryRawUnsafe.mock.calls[0]?.[1]).toEqual([2, 7]);
+    expect(tenant.warehouse.update.mock.calls[0]?.[0].data).toEqual({
+      isActive: false,
+    });
+    expect(evaluateAlerts).toHaveBeenCalledWith(tenant, [4, 5]);
   });
 
   it('skips the uniqueness checks for unchanged values', async () => {

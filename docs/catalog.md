@@ -9,7 +9,7 @@ CU-03 (US-08, US-09, US-10, US-11): the organization's products, their families 
 | `GET /products?search=&categoryId=&status=&page=&pageSize=` | `catalog.read` | Paginated search sorted by name: `{ items, total, page, pageSize }`. `search` matches code or name (case-insensitive); `categoryId` includes its subcategories; `status` is `ACTIVE` (default), `INACTIVE` or `ALL`; `pageSize` ≤ 100 (default 25). No matches is an empty page, not an error. |
 | `GET /products/:id` | `catalog.read` | Product with `totalOnHand`, and per enabled warehouse its on-hand stock, safety stock, reorder point and their `valueSource`; `hasMovements`. |
 | `POST /products` | `product.manage` | Register a product (no stock yet). |
-| `PATCH /products/:id` | `product.manage` | Edit any field; `isActive: false` retires it. |
+| `PATCH /products/:id` | `product.manage` | Edit any field; `isActive: false` retires it and resolves its open alerts (reactivating evaluates them again). |
 | `GET /categories?status=` | `catalog.read` | Flat list with `parentId` and `productCount`; `status` defaults to `ALL`. |
 | `GET /categories/:id` | `catalog.read` | One category. |
 | `POST /categories` | `category.manage` | `{ name, parentId?, description? }`. |

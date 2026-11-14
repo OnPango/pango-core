@@ -19,6 +19,16 @@ export enum AlertStatusFilter {
   DISMISSED = 'DISMISSED',
 }
 
+/** Order of `GET /alerts`. */
+export enum AlertSort {
+  /** Most recently raised first (default). */
+  CREATED = 'CREATED',
+  /** Most recently changed first: raised, refreshed (e.g. severity raised) or resolved. */
+  UPDATED = 'UPDATED',
+  /** Most severe first, then most recently changed. */
+  SEVERITY = 'SEVERITY',
+}
+
 export class SetReplenishmentDto {
   @ApiProperty({
     example: 10,
@@ -96,6 +106,19 @@ export class ListAlertsQueryDto {
   @IsOptional()
   @IsEnum(AlertStatusFilter)
   status?: AlertStatusFilter;
+
+  @ApiPropertyOptional({
+    enum: AlertSort,
+    enumName: 'AlertSort',
+    default: AlertSort.CREATED,
+    description:
+      '`CREATED`: most recently raised first. `UPDATED`: most recently changed ' +
+      'first, so an old alert that just reached a higher severity comes up. ' +
+      '`SEVERITY`: most severe first, then most recently changed',
+  })
+  @IsOptional()
+  @IsEnum(AlertSort)
+  sort?: AlertSort;
 
   @ApiPropertyOptional({ example: 1, default: 1, minimum: 1 })
   @IsOptional()

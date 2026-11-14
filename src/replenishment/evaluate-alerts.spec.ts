@@ -20,6 +20,7 @@ function productWarehouse(overrides: Record<string, unknown> = {}) {
     maxStock: D(50),
     valueSource: 'MANUAL',
     product: { sku: 'TOR-001', isActive: true, stockUnit: { code: 'EA' } },
+    warehouse: { isActive: true },
     ...overrides,
   };
 }
@@ -226,9 +227,60 @@ describe('evaluateAlerts', () => {
     expect(tx.alert.update).not.toHaveBeenCalled();
     expect(tx.alert.updateMany).toHaveBeenCalledWith({
       where: { id: { in: [7] }, status: 'OPEN' },
-      data: { status: 'RESOLVED', resolvedAt: now, updatedAt: now },
+      data: {
+        status: 'RESOLVED',
+        resolution: 'STOCK_RECOVERED',
+        resolvedAt: now,
+        updatedAt: now,
+      },
     });
   });
+
+  it('says the reorder point changed when stock did not come back', async () => {
+    // The alert showed 8 against 10; the point drops to 6 with 8 still available.
+    const tx = setup({
+      onHand: 8,
+      pw: { reorderPoint: D(6), safetyStock: D(2) },
+      openAlertId: 7,
+    });
+    await evaluateAlerts(tx as unknown as Tx, [9], now);
+    expect(tx.alert.updateMany.mock.calls[0]?.[0].data.resolution).toBe(
+      'REORDER_POINT_CHANGED',
+    );
+  });
+
+  it('says the reorder point was removed', async () => {
+    const tx = setup({ onHand: 0, pw: { reorderPoint: D(0) }, openAlertId: 7 });
+    await evaluateAlerts(tx as unknown as Tx, [9], now);
+    expect(tx.alert.updateMany.mock.calls[0]?.[0].data.resolution).toBe(
+      'NO_REORDER_POINT',
+    );
+  });
+
+  it.each([
+    [
+      'the product',
+      {
+        product: { sku: 'TOR-001', isActive: false, stockUnit: { code: 'EA' } },
+      },
+    ],
+    ['the product-warehouse', { isActive: false }],
+    ['the warehouse', { warehouse: { isActive: false } }],
+  ])(
+    'resolves as inactive when %s is deactivated, and raises nothing',
+    async (_, pw) => {
+      const tx = setup({ onHand: 0, pw, openAlertId: 7 });
+      await evaluateAlerts(tx as unknown as Tx, [9], now);
+      expect(tx.alert.update).not.toHaveBeenCalled();
+      expect(tx.alert.updateMany.mock.calls[0]?.[0].data.resolution).toBe(
+        'INACTIVE',
+      );
+
+      const closed = setup({ onHand: 0, pw });
+      await evaluateAlerts(closed as unknown as Tx, [9], now);
+      expect(closed.alert.create).not.toHaveBeenCalled();
+    },
+  );
 
   it('raises nothing without a reorder point and resolves what was open', async () => {
     const tx = setup({ onHand: 0, pw: { reorderPoint: D(0) } });

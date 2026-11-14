@@ -146,6 +146,20 @@ enum AlertStatus {
   @@map("alert_status")
 }
 
+/// Why an alert was resolved.
+enum AlertResolution {
+  /// Available stock rose above the reorder point it was compared against.
+  STOCK_RECOVERED
+  /// The reorder point was lowered below the available stock.
+  REORDER_POINT_CHANGED
+  /// The reorder point was removed (set to 0).
+  NO_REORDER_POINT
+  /// The product, its product-warehouse or the warehouse was deactivated.
+  INACTIVE
+
+  @@map("alert_resolution")
+}
+
 /// Storage warehouse (bodega) or point of sale (tienda).
 enum WarehouseType {
   WAREHOUSE
@@ -864,6 +878,8 @@ model Alert {
   /// Last change: values refreshed while open (e.g. severity raised) or resolution.
   updatedAt          DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
   resolvedAt         DateTime?   @map("resolved_at") @db.Timestamptz
+  /// Why it was resolved; null while open, and for alerts resolved before reasons were recorded.
+  resolution         AlertResolution?
 
   productWarehouse ProductWarehouse @relation(fields: [productWarehouseId], references: [id], onDelete: Restrict)
   draftMovement    Movement?        @relation(fields: [draftMovementId], references: [id], onDelete: SetNull)

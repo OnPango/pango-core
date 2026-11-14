@@ -149,6 +149,30 @@ export class AlertDto {
 
   @ApiProperty({ type: Date, nullable: true })
   resolvedAt: Date | null;
+
+  @ApiProperty({
+    enum: [
+      'STOCK_RECOVERED',
+      'REORDER_POINT_CHANGED',
+      'NO_REORDER_POINT',
+      'INACTIVE',
+    ],
+    enumName: 'AlertResolution',
+    nullable: true,
+    description:
+      'Why it was resolved: available stock rose above the reorder point, the ' +
+      'reorder point was lowered below it or removed, or the product, its ' +
+      'product-warehouse or the warehouse was deactivated. Null while open and ' +
+      'for alerts resolved before reasons were recorded. A resolved alert keeps ' +
+      'the values of its last evaluation, so with `REORDER_POINT_CHANGED` they ' +
+      'still read below the reorder point',
+  })
+  resolution:
+    | 'STOCK_RECOVERED'
+    | 'REORDER_POINT_CHANGED'
+    | 'NO_REORDER_POINT'
+    | 'INACTIVE'
+    | null;
 }
 
 export class AlertPageDto {
