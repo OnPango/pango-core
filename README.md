@@ -31,13 +31,14 @@ The `dev` branch currently provides:
   their expiry dates.
 - **Replenishment**: safety stock and reorder point per product and warehouse,
   and stock alerts raised and resolved automatically.
+- **Demand history** per product and period, the input of the forecast.
 - **Departments and internal stock requests**, with reservations, a status
   history and fulfilment through an outbound movement that feeds demand.
 - **OpenAPI documentation** through Swagger UI.
 - A database model prepared for suppliers, transfers, locations, forecasting
   and notifications.
 
-Catalog, warehouse, movement, stock, replenishment, alert, department and stock request
+Catalog, warehouse, movement, stock, demand history, replenishment, alert, department and stock request
 endpoints are implemented today (details in `docs/`). Transfers, drafts and
 voiding of movements, location management, forecasting and notifications are
 represented in the tenant schema but their API modules are still planned.

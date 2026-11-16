@@ -200,7 +200,7 @@ Derived values will be exposed as views in a later tenant migration:
 
 - `v_product_warehouse_stock`: per `product_warehouse` → `on_hand` (sum of `stock_balances.quantity`), `reserved` (reservations of active stock requests for that product and warehouse) and `available` (the difference).
 - `v_stock_ledger`: confirmed movements with a running balance per product and warehouse.
-- `v_demand_history`: confirmed demand outbound movements aggregated per `product_warehouse` and period (per `settings.forecast_granularity`).
+- `v_demand_history`: confirmed demand outbound movements aggregated per `product_warehouse` and period (per `settings.forecast_granularity`). For now `GET /products/:id/demand` computes it with a query ([`demand.md`](demand.md)).
 - `v_in_transit`: lines of movements in `IN_TRANSIT`.
 - Fulfilled quantity per stock request line: sum of the lines of the confirmed movements that fulfil the request, per product.
 
