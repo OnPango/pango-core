@@ -69,6 +69,7 @@ function toDto(warehouse: WarehouseWithLocation): WarehouseDto {
     type: warehouse.type,
     address: warehouse.address,
     defaultLocation: warehouse.defaultLocation,
+    holdsStock: warehouse.holdsStock,
     isActive: warehouse.isActive,
     createdAt: warehouse.createdAt,
     updatedAt: warehouse.updatedAt,
@@ -139,6 +140,7 @@ export class WarehousesService {
             name: dto.name,
             type: dto.type,
             address: dto.address || null,
+            holdsStock: dto.holdsStock ?? true,
           },
         });
         const location = await tx.location.create({
@@ -177,6 +179,7 @@ export class WarehousesService {
     }
     if (dto.type !== undefined) data.type = dto.type;
     if (dto.address !== undefined) data.address = dto.address || null;
+    if (dto.holdsStock !== undefined) data.holdsStock = dto.holdsStock;
     if (dto.isActive !== undefined && dto.isActive !== warehouse.isActive) {
       if (!dto.isActive && (await this.hasStock(tenant, id))) {
         throw warehouseErrors.hasStock();

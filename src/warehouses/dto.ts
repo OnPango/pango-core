@@ -89,6 +89,17 @@ export class CreateWarehouseDto {
   @IsString()
   @MaxLength(200)
   address?: string | null;
+
+  @ApiPropertyOptional({
+    example: true,
+    default: true,
+    description:
+      'false for a warehouse that never holds stock (e.g. sells to order): its ' +
+      'demand does not drive replenishment and its products are not forecast',
+  })
+  @IsOptional()
+  @IsBoolean()
+  holdsStock?: boolean;
 }
 
 export class UpdateWarehouseDto extends PartialType(CreateWarehouseDto) {

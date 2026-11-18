@@ -85,7 +85,7 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 | Table | Purpose |
 |---|---|
-| `warehouses` | Storage warehouses (`WAREHOUSE`) and stores (`STORE`). Code and name unique in the organization (the name case-insensitively, checked by the application). `default_location_id` points to the location created with the warehouse. Never deleted, only deactivated (and only without stock on hand). |
+| `warehouses` | Storage warehouses (`WAREHOUSE`) and stores (`STORE`). Code and name unique in the organization (the name case-insensitively, checked by the application). `default_location_id` points to the location created with the warehouse. `holds_stock` is false for warehouses that never hold stock (not forecast). Never deleted, only deactivated (and only without stock on hand). |
 | `location_levels` | Named levels of a warehouse's location hierarchy, by `depth` (1 = top). |
 | `locations` | Places where stock is kept, arranged as a tree (`parent_id`). Each belongs to one warehouse (`warehouse_id`), with a code unique within it. `level_id` is NULL only for the warehouse's default location (code `DEFAULT`). |
 | `product_warehouses` | A product enabled in a warehouse, with its replenishment parameters (method, service level, lead time, min/max, safety stock, reorder point). |
@@ -112,8 +112,8 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 
 | Table | Purpose |
 |---|---|
-| `forecast_runs` | One execution of the forecasting service. |
-| `forecasts` | Forecast per product-warehouse and run: model, demand class, error metric. One is current per product-warehouse. |
+| `forecast_runs` | One execution of the forecasting service: request id, history end, status, per-series counts, policy and service versions. |
+| `forecasts` | Result per product-warehouse and run, `OK`, `NO_FORECAST` (declined on purpose, with a `reason`) or `ERROR`: model, demand class, horizon total interval, profile, or the service's error. One `OK` is current per product-warehouse. |
 | `forecast_periods` | Estimated demand and bounds per period. |
 | `alerts` | Stock alerts (`BELOW_ROP`, `STOCKOUT`, `OVERSTOCK`) with the available stock and reorder point of the last evaluation (refreshed while open, `updated_at`), optionally linked to a draft replenishment movement. |
 | `notifications` | Delivery of an alert to a user through a channel. |
