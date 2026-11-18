@@ -8,6 +8,7 @@ import { Prisma } from '../generated/prisma/tenant/client.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
 import { demandErrors } from './demand-errors.js';
+import { demandCondition } from './demand-rule.js';
 import { type DemandQueryDto, GranularityValue } from './dto.js';
 import type { DemandSeriesDto } from './responses.js';
 
@@ -45,6 +46,18 @@ export function nextPeriod(
 /** Today's date in a time zone, as `YYYY-MM-DD`. */
 export function localToday(timeZone: string, now = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone }).format(now);
+}
+
+/**
+ * Last day of the last complete week (Monday to Sunday) in a time zone: the
+ * `history_end` of a forecast, so the week in progress is never sent half empty.
+ */
+export function lastCompleteSunday(timeZone: string, now = new Date()): string {
+  const date = toDate(
+    periodStart(localToday(timeZone, now), GranularityValue.WEEKLY),
+  );
+  date.setUTCDate(date.getUTCDate() - 1);
+  return toDay(date);
 }
 
 /** Every period start from `first` to `last` (both period starts), inclusive. */
@@ -147,10 +160,7 @@ export class DemandService {
       JOIN "${schema}"."movement_types" t ON t."id" = m."movement_type_id"
       JOIN "${schema}"."locations" loc ON loc."id" = l."origin_location_id"
      WHERE l."product_id" = $1
-       AND m."status" = 'CONFIRMED'
-       AND t."nature" = 'OUTBOUND'
-       AND t."counts_as_demand"
-       AND (m."stock_request_id" IS NOT NULL OR t."id" IS DISTINCT FROM $2::int)
+       AND ${demandCondition('$2')}
        AND ($3::int[] IS NULL OR loc."warehouse_id" = ANY($3::int[]))`;
     const params = [
       productId,

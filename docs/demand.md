@@ -47,4 +47,4 @@ Inbound movements, adjustments and transfers never count. The series is computed
 ## Not done yet
 
 - The history imported from the organization's previous system (T-01, CU-17): there is no table for it yet.
-- The demand forecast (CU-10) and the calculated reorder point (CU-11), which consume this series through the forecasting service.
+- The calculated reorder point (CU-11). The forecast (CU-10) sends the same demand, per day ([`forecasting.md`](forecasting.md)).

@@ -11,6 +11,7 @@ import { ReplenishmentModule } from './replenishment/replenishment.module.js';
 import { StockRequestsModule } from './stock-requests/stock-requests.module.js';
 import { StockModule } from './stock/stock.module.js';
 import { DemandModule } from './demand/demand.module.js';
+import { ForecastingModule } from './forecasting/forecasting.module.js';
 import { DepartmentsModule } from './departments/departments.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -38,6 +39,7 @@ import { WarehousesModule } from './warehouses/warehouses.module.js';
     StockRequestsModule,
     StockModule,
     DemandModule,
+    ForecastingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

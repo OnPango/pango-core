@@ -31,17 +31,19 @@ The `dev` branch currently provides:
   their expiry dates.
 - **Replenishment**: safety stock and reorder point per product and warehouse,
   and stock alerts raised and resolved automatically.
-- **Demand history** per product and period, the input of the forecast.
+- **Demand history** per product and period, and **demand forecasting** runs
+  through the Python forecasting service.
 - **Departments and internal stock requests**, with reservations, a status
   history and fulfilment through an outbound movement that feeds demand.
 - **OpenAPI documentation** through Swagger UI.
-- A database model prepared for suppliers, transfers, locations, forecasting
-  and notifications.
+- A database model prepared for suppliers, transfers, locations and
+  notifications.
 
-Catalog, warehouse, movement, stock, demand history, replenishment, alert, department and stock request
-endpoints are implemented today (details in `docs/`). Transfers, drafts and
-voiding of movements, location management, forecasting and notifications are
-represented in the tenant schema but their API modules are still planned.
+Catalog, warehouse, movement, stock, demand history, forecasting, replenishment,
+alert, department and stock request endpoints are implemented today (details in
+`docs/`). Transfers, drafts and voiding of movements, location management and
+notifications are represented in the tenant schema but their API modules are
+still planned.
 
 ## Architecture
 
@@ -323,7 +325,7 @@ capabilities:
 - Suppliers and supplier-product relationships.
 - Custom product attributes.
 - Lead times and calculated reorder points by product and warehouse.
-- Demand forecasting and forecast runs.
+- Forecast evaluation, closed-date calendar and scheduled forecast runs.
 - In-app and email notifications.
 - Audit logs for user, catalog and warehouse changes.
 - Rate limiting for authentication and invitation flows.

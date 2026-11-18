@@ -3,6 +3,7 @@ import type { AuthContext, RoleGrant } from '../auth/auth-context.js';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import {
   DemandService,
+  lastCompleteSunday,
   localToday,
   nextPeriod,
   periodStart,
@@ -103,6 +104,22 @@ describe('demand periods', () => {
     expect(localToday('America/Bogota', new Date('2026-11-15T03:00:00Z'))).toBe(
       '2026-11-14',
     );
+  });
+});
+
+describe('lastCompleteSunday', () => {
+  it('ends the history on the Sunday before the current week', () => {
+    // Saturday 21 → Sunday 15; Monday 23 → Sunday 22 (that week is complete).
+    expect(
+      lastCompleteSunday('America/Bogota', new Date('2026-11-21T15:00:00Z')),
+    ).toBe('2026-11-15');
+    expect(
+      lastCompleteSunday('America/Bogota', new Date('2026-11-23T15:00:00Z')),
+    ).toBe('2026-11-22');
+    // Monday 03:00 UTC is still Sunday 22 in Bogotá: that week is in progress.
+    expect(
+      lastCompleteSunday('America/Bogota', new Date('2026-11-23T03:00:00Z')),
+    ).toBe('2026-11-15');
   });
 });
 

@@ -35,6 +35,12 @@ export class WarehouseDto {
   })
   defaultLocation: LocationRefDto | null;
 
+  @ApiProperty({
+    example: true,
+    description: 'false: never holds stock, so its products are not forecast',
+  })
+  holdsStock: boolean;
+
   @ApiProperty({ example: true })
   isActive: boolean;
 
