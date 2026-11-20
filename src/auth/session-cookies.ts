@@ -9,6 +9,9 @@ export const ACCESS_COOKIE_PREFIX = `${SESSION_COOKIE_PREFIX}access_`;
 export const REFRESH_COOKIE_PREFIX = `${SESSION_COOKIE_PREFIX}refresh_`;
 // Only the endpoints that read it (refresh, logout) receive the refresh cookie.
 export const REFRESH_COOKIE_PATH = '/auth';
+// The pending login (second step) is only read by /auth/login/verify and /resend.
+export const LOGIN_COOKIE_PREFIX = `${SESSION_COOKIE_PREFIX}login_`;
+export const LOGIN_COOKIE_PATH = '/auth/login';
 
 /** What a session endpoint returns: both tokens travel only in cookies. */
 export type SessionBody = Omit<
@@ -50,6 +53,34 @@ export class SessionCookies {
 
   static refreshName(subdomain: string): string {
     return `${REFRESH_COOKIE_PREFIX}${subdomain}`;
+  }
+
+  static loginName(subdomain: string): string {
+    return `${LOGIN_COOKIE_PREFIX}${subdomain}`;
+  }
+
+  /** Holds the token of a pending login until its code is entered. */
+  issueLoginChallenge(
+    response: Response,
+    subdomain: string,
+    token: string,
+    maxAgeMs: number,
+  ): void {
+    response.cookie(SessionCookies.loginName(subdomain), token, {
+      ...this.loginOptions(),
+      maxAge: maxAgeMs,
+    });
+  }
+
+  readLoginChallenge(request: Request, subdomain: string): string | null {
+    return readCookie(request, SessionCookies.loginName(subdomain));
+  }
+
+  clearLoginChallenge(response: Response, subdomain: string): void {
+    response.clearCookie(
+      SessionCookies.loginName(subdomain),
+      this.loginOptions(),
+    );
   }
 
   /** Sets both cookies and returns the body without any token. */
@@ -97,6 +128,10 @@ export class SessionCookies {
 
   private refreshOptions(): CookieOptions {
     return { ...this.base, path: REFRESH_COOKIE_PATH };
+  }
+
+  private loginOptions(): CookieOptions {
+    return { ...this.base, path: LOGIN_COOKIE_PATH };
   }
 }
 

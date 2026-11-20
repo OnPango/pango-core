@@ -1,12 +1,17 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
-// Errors carry a stable `code` so the frontend can react without parsing messages.
+// Errors carry a stable `code` so the frontend can react without parsing messages, and
+// sometimes extra fields it needs to act (`attemptsLeft`, `retryAfterSeconds`).
 export function apiError(
   status: HttpStatus,
   code: string,
   message: string,
+  extra?: Record<string, unknown>,
 ): HttpException {
-  return new HttpException({ statusCode: status, code, message }, status);
+  return new HttpException(
+    { statusCode: status, code, message, ...extra },
+    status,
+  );
 }
 
 export const authErrors = {
@@ -69,6 +74,44 @@ export const authErrors = {
       HttpStatus.BAD_REQUEST,
       'VERIFICATION_TOKEN_INVALID',
       'This confirmation link is invalid, was already used or has expired',
+    ),
+  loginChallengeInvalid: () =>
+    apiError(
+      HttpStatus.UNAUTHORIZED,
+      'LOGIN_CHALLENGE_INVALID',
+      'This login is no longer pending; log in again',
+    ),
+  loginCodeInvalid: (attemptsLeft: number) =>
+    apiError(
+      HttpStatus.UNAUTHORIZED,
+      'LOGIN_CODE_INVALID',
+      'The code is not correct',
+      { attemptsLeft },
+    ),
+  loginCodeExpired: () =>
+    apiError(
+      HttpStatus.UNAUTHORIZED,
+      'LOGIN_CODE_EXPIRED',
+      'The code has expired; request a new one',
+    ),
+  loginCodeAttemptsExceeded: () =>
+    apiError(
+      HttpStatus.UNAUTHORIZED,
+      'LOGIN_CODE_ATTEMPTS_EXCEEDED',
+      'Too many wrong codes; log in again',
+    ),
+  loginCodeResendTooSoon: (retryAfterSeconds: number) =>
+    apiError(
+      HttpStatus.TOO_MANY_REQUESTS,
+      'LOGIN_CODE_RESEND_TOO_SOON',
+      'Wait before requesting another code',
+      { retryAfterSeconds },
+    ),
+  loginCodeResendLimit: () =>
+    apiError(
+      HttpStatus.TOO_MANY_REQUESTS,
+      'LOGIN_CODE_RESEND_LIMIT',
+      'No more codes can be sent for this login; log in again',
     ),
   unauthenticated: () =>
     apiError(

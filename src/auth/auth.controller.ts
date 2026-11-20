@@ -33,9 +33,12 @@ import {
   ResendVerificationDto,
   SignupDto,
   VerifyEmailDto,
+  VerifyLoginCodeDto,
 } from './dto.js';
 import { EmailVerificationService } from './email-verification.service.js';
+import { LoginCodeService } from './login-code.service.js';
 import {
+  LoginCodeRequiredResponseDto,
   SessionProfileDto,
   SessionResponseDto,
   VerificationRequiredResponseDto,
@@ -65,6 +68,7 @@ export class AuthController {
     private readonly tenantResolver: TenantResolver,
     private readonly verification: EmailVerificationService,
     private readonly cookies: SessionCookies,
+    private readonly loginCodes: LoginCodeService,
   ) {}
 
   @Public()
@@ -148,13 +152,24 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: "Log in to the request's organization",
+    summary: "Log in to the request's organization (first step)",
     description:
-      'Valid credentials of an account that does not belong to the organization are rejected with `NOT_A_MEMBER`. ' +
-      'Returns the user’s roles and permissions in that organization. ' +
-      COOKIE_NOTE,
+      'Checks the password and that the account may enter the organization (valid credentials of an account ' +
+      'that does not belong to it are rejected with `NOT_A_MEMBER`), then emails a six-digit code and answers ' +
+      '`202` with `LoginCodeRequiredResponse`; `POST /auth/login/verify` completes it. The pending login is kept ' +
+      'in the HttpOnly cookie `pango_login_<subdomain>` (path `/auth/login`). Logging in again within a minute ' +
+      'keeps the code already sent instead of emailing another. With `LOGIN_EMAIL_CODE_ENABLED=false` it answers ' +
+      `\`200\` with the session at once. ${COOKIE_NOTE}`,
   })
-  @ApiOkResponse({ type: SessionResponseDto })
+  @ApiExtraModels(SessionResponseDto, LoginCodeRequiredResponseDto)
+  @ApiAcceptedResponse({
+    description: 'Code emailed; enter it with POST /auth/login/verify',
+    type: LoginCodeRequiredResponseDto,
+  })
+  @ApiOkResponse({
+    description: 'Session, only when the emailed code is disabled',
+    type: SessionResponseDto,
+  })
   @ApiPublic({
     tenant: true,
     validation: true,
@@ -170,11 +185,117 @@ export class AuthController {
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const session = await this.auth.login(
-      this.tenantResolver.resolve(request),
-      dto,
+    const subdomain = this.tenantResolver.resolve(request);
+    const result = await this.auth.login(subdomain, dto);
+    if ('accessToken' in result) return this.cookies.issue(response, result);
+    this.cookies.issueLoginChallenge(
+      response,
+      subdomain!,
+      result.token,
+      this.loginCodes.cookieMaxAgeMs,
     );
-    return this.cookies.issue(response, session);
+    response.status(HttpStatus.ACCEPTED);
+    return result.state;
+  }
+
+  @Public()
+  @Post('login/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Enter the emailed code (second step of the login)',
+    description:
+      'Reads the pending login from the `pango_login_<subdomain>` cookie and, with the right code, opens the ' +
+      'session and clears that cookie. `LOGIN_CODE_INVALID` carries `attemptsLeft`; after the last attempt (`LOGIN_CODE_ATTEMPTS_EXCEEDED`) or with ' +
+      'no pending login (`LOGIN_CHALLENGE_INVALID`) the cookie is cleared and the user must log in again. ' +
+      `An expired code (\`LOGIN_CODE_EXPIRED\`) can be replaced with POST /auth/login/resend. ${COOKIE_NOTE}`,
+  })
+  @ApiOkResponse({ type: SessionResponseDto })
+  @ApiPublic({
+    tenant: true,
+    validation: true,
+    errors: {
+      [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'],
+      [HttpStatus.UNAUTHORIZED]: [
+        'LOGIN_CODE_INVALID',
+        'LOGIN_CODE_EXPIRED',
+        'LOGIN_CODE_ATTEMPTS_EXCEEDED',
+        'LOGIN_CHALLENGE_INVALID',
+      ],
+      [HttpStatus.FORBIDDEN]: ['CSRF_REJECTED', ...SESSION_FORBIDDEN],
+    },
+  })
+  async verifyLoginCode(
+    @Req() request: Request,
+    @Body() dto: VerifyLoginCodeDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const subdomain = this.tenantResolver.resolve(request);
+    const token = subdomain
+      ? this.cookies.readLoginChallenge(request, subdomain)
+      : null;
+    try {
+      const session = await this.auth.verifyLoginCode(
+        subdomain,
+        token,
+        dto.code,
+      );
+      this.cookies.clearLoginChallenge(response, subdomain!);
+      return this.cookies.issue(response, session);
+    } catch (error) {
+      if (subdomain && endsLogin(error)) {
+        this.cookies.clearLoginChallenge(response, subdomain);
+      }
+      throw error;
+    }
+  }
+
+  @Public()
+  @Post('login/resend')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Email another login code',
+    description:
+      'For the pending login of the `pango_login_<subdomain>` cookie: a new code replaces the previous one ' +
+      'and the attempts start again. At most one per minute (`LOGIN_CODE_RESEND_TOO_SOON` carries ' +
+      '`retryAfterSeconds`) and five per login (`LOGIN_CODE_RESEND_LIMIT`: log in again).',
+  })
+  @ApiAcceptedResponse({ type: LoginCodeRequiredResponseDto })
+  @ApiPublic({
+    tenant: true,
+    errors: {
+      [HttpStatus.BAD_REQUEST]: ['TENANT_REQUIRED'],
+      [HttpStatus.UNAUTHORIZED]: ['LOGIN_CHALLENGE_INVALID'],
+      [HttpStatus.FORBIDDEN]: ['CSRF_REJECTED'],
+      [HttpStatus.TOO_MANY_REQUESTS]: [
+        'LOGIN_CODE_RESEND_TOO_SOON',
+        'LOGIN_CODE_RESEND_LIMIT',
+      ],
+    },
+  })
+  async resendLoginCode(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const subdomain = this.tenantResolver.resolve(request);
+    const token = subdomain
+      ? this.cookies.readLoginChallenge(request, subdomain)
+      : null;
+    try {
+      const state = await this.auth.resendLoginCode(subdomain, token);
+      // The challenge may now live as long as its new code: renew the cookie too.
+      this.cookies.issueLoginChallenge(
+        response,
+        subdomain!,
+        token!,
+        this.loginCodes.cookieMaxAgeMs,
+      );
+      return state;
+    } catch (error) {
+      if (subdomain && endsLogin(error)) {
+        this.cookies.clearLoginChallenge(response, subdomain);
+      }
+      throw error;
+    }
   }
 
   @Public()
@@ -260,4 +381,20 @@ export class AuthController {
   me(@CurrentAuth() auth: AuthContext) {
     return toSessionProfile(auth);
   }
+}
+
+// Errors after which the pending login is useless: the client must log in again.
+const LOGIN_ENDING_CODES = new Set([
+  'LOGIN_CHALLENGE_INVALID',
+  'LOGIN_CODE_ATTEMPTS_EXCEEDED',
+  'LOGIN_CODE_RESEND_LIMIT',
+]);
+
+function endsLogin(error: unknown): boolean {
+  if (!(error instanceof HttpException)) return false;
+  const body = error.getResponse();
+  return (
+    typeof body === 'object' &&
+    LOGIN_ENDING_CODES.has((body as { code?: string }).code ?? '')
+  );
 }

@@ -117,10 +117,11 @@ model Organization {
   createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  subscriptions Subscription[]
-  memberships   OrganizationMember[]
-  invitations   OrganizationInvitation[]
-  refreshTokens RefreshToken[]
+  subscriptions   Subscription[]
+  memberships     OrganizationMember[]
+  invitations     OrganizationInvitation[]
+  refreshTokens   RefreshToken[]
+  loginChallenges LoginChallenge[]
 
   @@map("organizations")
 }
@@ -162,6 +163,7 @@ model Account {
   sentInvitations OrganizationInvitation[]
   refreshTokens   RefreshToken[]
   tokens          AccountToken[]
+  loginChallenges LoginChallenge[]
 
   @@map("accounts")
 }
@@ -228,6 +230,35 @@ model RefreshToken {
   @@index([accountId, organizationId])
   @@index([organizationId])
   @@map("refresh_tokens")
+}
+
+/// Second step of a login: valid credentials open a challenge, and a code emailed to the
+/// account completes it. The client holds the challenge token in an HttpOnly cookie; only
+/// its SHA-256 and an HMAC of the code are stored. Consumed when the code is accepted or
+/// the attempts run out.
+model LoginChallenge {
+  id             Int       @id @default(autoincrement())
+  accountId      Int       @map("account_id")
+  organizationId Int       @map("organization_id")
+  tokenHash      String    @unique @map("token_hash") @db.Char(64)
+  /// HMAC-SHA256 of the code, keyed with the server secret and bound to this challenge.
+  codeHash       String    @map("code_hash") @db.Char(64)
+  /// Wrong codes entered for the current code.
+  attempts       Int       @default(0) @db.SmallInt
+  /// Codes emailed for this challenge (the first one included).
+  sendCount      Int       @default(1) @map("send_count") @db.SmallInt
+  /// When the current code stops working.
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz
+  lastSentAt     DateTime  @default(now()) @map("last_sent_at") @db.Timestamptz
+  consumedAt     DateTime? @map("consumed_at") @db.Timestamptz
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, organizationId])
+  @@index([organizationId])
+  @@map("login_challenges")
 }
 
 /// Single-use token emailed to an account (email verification). Only the SHA-256 is stored.

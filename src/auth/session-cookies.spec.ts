@@ -54,6 +54,36 @@ describe('SessionCookies', () => {
     );
   });
 
+  it('keeps a pending login in its own cookie, sent only to the login endpoints', () => {
+    const { cookies, response, res } = setup({ COOKIE_SECURE: 'true' });
+    cookies.issueLoginChallenge(res, 'demo', 'challenge-secret', 3_000_000);
+    expect(response.cookie).toHaveBeenCalledWith(
+      'pango_login_demo',
+      'challenge-secret',
+      {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'lax',
+        path: '/auth/login',
+        maxAge: 3_000_000,
+      },
+    );
+    cookies.clearLoginChallenge(res, 'demo');
+    expect(response.clearCookie).toHaveBeenCalledWith(
+      'pango_login_demo',
+      expect.objectContaining({ path: '/auth/login' }),
+    );
+    const request = {
+      cookies: { pango_login_demo: 'challenge-secret' },
+    } as unknown as Request;
+    expect(cookies.readLoginChallenge(request, 'demo')).toBe(
+      'challenge-secret',
+    );
+    expect(cookies.readLoginChallenge(request, 'other')).toBeNull();
+    // The CSRF check covers it like the session cookies.
+    expect(hasSessionCookie(request)).toBe(true);
+  });
+
   it('is Secure by default only in production, and host-only without COOKIE_DOMAIN', () => {
     const dev = setup();
     dev.cookies.issue(dev.res, session);
