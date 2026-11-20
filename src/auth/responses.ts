@@ -3,6 +3,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type { RoleGrant, SessionProfile } from './auth-context.js';
 import type { VerificationRequiredResponse } from './auth.service.js';
+import type { LoginChallengeState } from './login-code.service.js';
 import type { SessionBody } from './session-cookies.js';
 
 export class AccountDto {
@@ -123,6 +124,34 @@ export class VerificationRequiredResponseDto implements VerificationRequiredResp
       'False if the email failed; POST /auth/verify-email/resend retries',
   })
   verificationEmailSent: boolean;
+}
+
+export class LoginCodeRequiredResponseDto implements LoginChallengeState {
+  @ApiProperty({ enum: [true], example: true })
+  codeRequired: true;
+
+  @ApiProperty({
+    example: 'a**@miempresa.co',
+    description: 'Where the code went, masked',
+  })
+  email: string;
+
+  @ApiProperty({ example: 6 })
+  codeLength: number;
+
+  @ApiProperty({ description: 'When the current code stops working' })
+  expiresAt: Date;
+
+  @ApiProperty({
+    description: 'From when POST /auth/login/resend sends another code',
+  })
+  resendAvailableAt: Date;
+
+  @ApiProperty({
+    example: true,
+    description: 'False if the email failed; POST /auth/login/resend retries',
+  })
+  emailSent: boolean;
 }
 
 export class VerifyEmailResponseDto {

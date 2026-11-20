@@ -47,6 +47,17 @@ export class LoginDto {
   password: string;
 }
 
+export class VerifyLoginCodeDto {
+  @ApiProperty({
+    example: '482193',
+    description: 'The six-digit code emailed after the password',
+    pattern: '^\\d{6}$',
+  })
+  @Transform(trim)
+  @Matches(/^\d{6}$/, { message: 'code must be six digits' })
+  code: string;
+}
+
 export class SignupOrganizationDto {
   @ApiProperty({ example: 'Mi Empresa SAS', maxLength: 150 })
   @Transform(trim)

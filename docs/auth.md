@@ -76,7 +76,11 @@ Creates the account, the organization and its tenant schema in one transaction (
 }
 ```
 
-### Login — `POST /auth/login` (organization subdomain)
+### Login — two steps (organization subdomain)
+
+The password alone does not open a session: a six-digit code emailed to the account completes the login.
+
+#### 1. `POST /auth/login`
 
 `{ "email", "password" }`. Checks, in order:
 
@@ -90,6 +94,44 @@ Creates the account, the organization and its tenant schema in one transaction (
 | Account is a member of **this** organization | `403 NOT_A_MEMBER` ("This user does not belong to this organization") |
 | Membership is not suspended | `403 MEMBERSHIP_SUSPENDED` |
 | Tenant user is active | `403 USER_DISABLED` |
+
+Every check passes before any email goes out. Then the API emails a code and answers `202` without a session:
+
+```json
+{
+  "codeRequired": true,
+  "email": "a**@miempresa.co",
+  "codeLength": 6,
+  "expiresAt": "2026-11-19T15:10:00.000Z",
+  "resendAvailableAt": "2026-11-19T15:01:00.000Z",
+  "emailSent": true
+}
+```
+
+- The pending login lives in `public.login_challenges` and the client holds its token in the HttpOnly cookie `pango_login_<subdomain>` (path `/auth/login`). Typed on another browser, the code alone is useless.
+- Only the SHA-256 of the token and an HMAC-SHA256 of the code are stored. The HMAC is keyed with `JWT_SECRET` and bound to the challenge, so a leaked table does not reveal the codes and a code never works for another login.
+- Entering the password again within the resend cooldown keeps the code already sent (no new email), so repeating the login cannot flood the inbox. After the cooldown it starts over with a new code and the previous pending login stops working.
+- `emailSent: false`: the email failed; `POST /auth/login/resend` retries.
+- `LOGIN_EMAIL_CODE_ENABLED=false` turns the second step off: login answers `200` with the session, as before. Only for local development, scripts and end-to-end tests.
+
+#### 2. `POST /auth/login/verify`
+
+`{ "code": "482193" }`, with the `pango_login_<subdomain>` cookie. The right code opens the session (the [session response](#session-response) and its cookies) and clears the login cookie. A code works once.
+
+| Case | Error |
+|---|---|
+| No pending login, already used, or started in another organization | `401 LOGIN_CHALLENGE_INVALID`: log in again |
+| Wrong code | `401 LOGIN_CODE_INVALID` with `attemptsLeft` |
+| Last attempt failed (`LOGIN_CODE_MAX_ATTEMPTS`, default 5) | `401 LOGIN_CODE_ATTEMPTS_EXCEEDED`: the login ends, log in again |
+| Code expired (`LOGIN_CODE_TTL_MINUTES`, default 10) | `401 LOGIN_CODE_EXPIRED`: request a new one |
+
+The checks of the session (membership, suspension, …) run again when it opens. The login cookie is cleared with `LOGIN_CHALLENGE_INVALID` and `LOGIN_CODE_ATTEMPTS_EXCEEDED`.
+
+#### Another code — `POST /auth/login/resend`
+
+No body, with the `pango_login_<subdomain>` cookie. Emails a new code (the previous one stops working, the attempts start again) and answers `202` with the same body as the login. At most one per `LOGIN_CODE_RESEND_SECONDS` (default 60; `429 LOGIN_CODE_RESEND_TOO_SOON` with `retryAfterSeconds`) and `LOGIN_CODE_MAX_SENDS` per login (default 5, the first one included; then `429 LOGIN_CODE_RESEND_LIMIT` and the user logs in again).
+
+Signing up with an already verified account and accepting an invitation still open a session directly: the invitation email already proves the address. `POST /auth/refresh` keeps a session alive without the code.
 
 ### Session response
 

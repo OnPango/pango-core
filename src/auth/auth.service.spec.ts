@@ -3,6 +3,7 @@ import type { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import type { ProvisioningService } from '../tenancy/provisioning.service.js';
 import type { AccessService } from './access.service.js';
 import type { EmailVerificationService } from './email-verification.service.js';
+import type { LoginCodeService } from './login-code.service.js';
 import type { AuthContext } from './auth-context.js';
 import { authErrors } from './auth-errors.js';
 import { AuthService } from './auth.service.js';
@@ -42,7 +43,7 @@ async function errorCode(promise: Promise<unknown>): Promise<string> {
   throw new Error('Expected the promise to reject');
 }
 
-function setup() {
+function setup({ loginCode = true } = {}) {
   const control = {
     account: { findUnique: vi.fn() },
     organization: { findUnique: vi.fn() },
@@ -65,14 +66,21 @@ function setup() {
     provision: vi.fn().mockResolvedValue({ accountId: 1, organizationId: 10 }),
   };
   const verification = { trySend: vi.fn().mockResolvedValue(true) };
+  const loginCodes = {
+    enabled: loginCode,
+    start: vi.fn().mockResolvedValue({ token: 'challenge', state: {} }),
+    verify: vi.fn().mockResolvedValue({ accountId: 1, organizationId: 10 }),
+    resend: vi.fn(),
+  };
   const service = new AuthService(
     control as unknown as ControlPrismaService,
     access as unknown as AccessService,
     tokens as unknown as TokenService,
     provisioning as unknown as ProvisioningService,
     verification as unknown as EmailVerificationService,
+    loginCodes as unknown as LoginCodeService,
   );
-  return { control, access, provisioning, verification, service };
+  return { control, access, provisioning, verification, loginCodes, service };
 }
 
 describe('AuthService.login', () => {
@@ -123,8 +131,44 @@ describe('AuthService.login', () => {
     expect(control.refreshToken.create).not.toHaveBeenCalled();
   });
 
-  it('returns tokens and the user roles', async () => {
-    const { service, control, access } = setup();
+  it('emails a code instead of opening the session', async () => {
+    const { service, control, access, loginCodes } = setup();
+    control.account.findUnique.mockResolvedValue({
+      id: 1,
+      passwordHash: await hashPassword('right-password'),
+      emailVerifiedAt: new Date(),
+    });
+    const result = await service.login('demo', {
+      email: 'ana@demo.co',
+      password: 'right-password',
+    });
+    expect(access.loadContext).toHaveBeenCalledWith(1, 10);
+    expect(loginCodes.start).toHaveBeenCalledWith(context);
+    expect(result).toEqual({ token: 'challenge', state: {} });
+    expect(control.refreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it('does not email a code to a non-member', async () => {
+    const { service, control, access, loginCodes } = setup();
+    control.account.findUnique.mockResolvedValue({
+      id: 1,
+      passwordHash: await hashPassword('right-password'),
+      emailVerifiedAt: new Date(),
+    });
+    access.loadContext.mockRejectedValue(authErrors.notAMember());
+    expect(
+      await errorCode(
+        service.login('demo', {
+          email: 'ana@demo.co',
+          password: 'right-password',
+        }),
+      ),
+    ).toBe('NOT_A_MEMBER');
+    expect(loginCodes.start).not.toHaveBeenCalled();
+  });
+
+  it('opens the session at once with the code disabled', async () => {
+    const { service, control, access } = setup({ loginCode: false });
     control.account.findUnique.mockResolvedValue({
       id: 1,
       passwordHash: await hashPassword('right-password'),
@@ -134,12 +178,38 @@ describe('AuthService.login', () => {
       email: 'ana@demo.co',
       password: 'right-password',
     });
+    if (!('accessToken' in session)) throw new Error('Expected a session');
     expect(access.loadContext).toHaveBeenCalledWith(1, 10);
     expect(session.accessToken).toBe('access-token');
     expect(session.user.roles[0].name).toBe('Owner');
     expect(session.organization).not.toHaveProperty('schemaName');
     const stored = control.refreshToken.create.mock.calls[0][0].data;
     expect(stored.tokenHash).toBe(hashToken(session.refreshToken));
+  });
+});
+
+describe('AuthService.verifyLoginCode', () => {
+  it('needs the pending login', async () => {
+    const { service } = setup();
+    expect(
+      await errorCode(service.verifyLoginCode('demo', null, '123456')),
+    ).toBe('LOGIN_CHALLENGE_INVALID');
+  });
+
+  it('opens the session of the verified challenge', async () => {
+    const { service, loginCodes, access } = setup();
+    const session = await service.verifyLoginCode(
+      'demo',
+      'challenge',
+      '123456',
+    );
+    expect(loginCodes.verify).toHaveBeenCalledWith(
+      'demo',
+      'challenge',
+      '123456',
+    );
+    expect(access.loadContext).toHaveBeenCalledWith(1, 10);
+    expect(session.accessToken).toBe('access-token');
   });
 });
 
