@@ -1,0 +1,82 @@
+import {
+  type CanActivate,
+  type ExecutionContext,
+  Injectable,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { TenantResolver } from '../tenancy/tenant-resolver.service.js';
+import { AccessService } from './access.service.js';
+import {
+  type AuthenticatedRequest,
+  grantedPermissions,
+} from './auth-context.js';
+import { authErrors } from './auth-errors.js';
+import { IS_PUBLIC_KEY, PERMISSIONS_KEY } from './decorators.js';
+import { SessionCookies } from './session-cookies.js';
+import { type AccessClaims, TokenService } from './token.service.js';
+
+function bearerToken(header: string | undefined): string | null {
+  if (!header) return null;
+  const [scheme, token] = header.split(' ');
+  return scheme?.toLowerCase() === 'bearer' && token ? token : null;
+}
+
+// Global guard: every route needs a valid access token unless marked @Public().
+// The token comes from the organization's HttpOnly access cookie, or else from an
+// `Authorization: Bearer` header (Swagger, scripts; not exposed to CSRF).
+// The token's organization must be the one the request is addressed to, and the
+// membership is re-checked on every request so suspensions apply immediately.
+@Injectable()
+export class AuthGuard implements CanActivate {
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly tokens: TokenService,
+    private readonly access: AccessService,
+    private readonly tenantResolver: TenantResolver,
+    private readonly cookies: SessionCookies,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const targets = [context.getHandler(), context.getClass()];
+    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, targets)) {
+      return true;
+    }
+
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const subdomain = this.tenantResolver.resolve(request);
+    if (!subdomain) throw authErrors.tenantRequired();
+
+    const token =
+      this.cookies.readAccess(request, subdomain) ??
+      bearerToken(request.headers.authorization);
+    if (!token) throw authErrors.unauthenticated();
+
+    let claims: AccessClaims;
+    try {
+      claims = await this.tokens.verifyAccessToken(token);
+    } catch {
+      throw authErrors.unauthenticated();
+    }
+
+    const auth = await this.access.loadContext(
+      claims.accountId,
+      claims.organizationId,
+    );
+    if (auth.organization.subdomain !== subdomain) {
+      throw authErrors.tenantMismatch();
+    }
+
+    const required =
+      this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, targets) ??
+      [];
+    if (required.length > 0) {
+      const granted = grantedPermissions(auth.user.roles);
+      if (!required.every((code) => granted.has(code))) {
+        throw authErrors.forbidden();
+      }
+    }
+
+    request.auth = auth;
+    return true;
+  }
+}

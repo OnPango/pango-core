@@ -1,0 +1,247 @@
+// Control plane (`public` schema): organizations, accounts, organization members and plans.
+// Shared by every organization. See docs/database.md.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../../src/generated/prisma/control"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+
+  @@map("organization_status")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+
+  @@map("subscription_status")
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+
+  @@map("membership_status")
+}
+
+enum BusinessSector {
+  RETAIL
+  WHOLESALE
+  MANUFACTURING
+  FOOD_AND_BEVERAGE
+  PHARMACY_AND_HEALTH
+  HARDWARE_AND_CONSTRUCTION
+  FASHION_AND_APPAREL
+  TECHNOLOGY
+  AGRICULTURE
+  SERVICES
+  OTHER
+
+  @@map("business_sector")
+}
+
+/// Number of people on the organization's team, as a range.
+enum TeamSize {
+  SIZE_1_5
+  SIZE_6_20
+  SIZE_21_50
+  SIZE_51_200
+  SIZE_201_PLUS
+
+  @@map("team_size")
+}
+
+/// Number of products the organization manages, as a range.
+enum ProductCount {
+  COUNT_1_100
+  COUNT_101_500
+  COUNT_501_2000
+  COUNT_2001_10000
+  COUNT_10001_PLUS
+
+  @@map("product_count")
+}
+
+enum AccountTokenPurpose {
+  EMAIL_VERIFICATION
+
+  @@map("account_token_purpose")
+}
+
+/// Commercial plan with the limits it grants.
+model Plan {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique @db.VarChar(60)
+  maxUsers      Int      @map("max_users")
+  maxWarehouses Int      @map("max_warehouses")
+  monthlyPrice  Decimal  @map("monthly_price") @db.Decimal(12, 2)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+/// A customer organization (SME). Its data lives in the `schemaName` schema.
+model Organization {
+  id             Int                @id @default(autoincrement())
+  /// Colombian NIT. Optional; unique when present.
+  taxId          String?            @unique @map("tax_id") @db.VarChar(20)
+  legalName      String             @map("legal_name") @db.VarChar(150)
+  /// ISO 3166-1 alpha-2 code (e.g. `CO`).
+  country        String             @db.Char(2)
+  city           String             @db.VarChar(100)
+  businessSector BusinessSector     @map("business_sector")
+  teamSize       TeamSize           @map("team_size")
+  productCount   ProductCount       @map("product_count")
+  contactPhone   String?            @map("contact_phone") @db.VarChar(20)
+  subdomain      String             @unique @db.VarChar(63)
+  /// `tenant_` + subdomain with `-` replaced by `_`.
+  schemaName     String             @unique @map("schema_name") @db.VarChar(63)
+  /// Number of tenant migrations applied to `schemaName`.
+  schemaVersion  Int                @default(0) @map("schema_version")
+  status         OrganizationStatus @default(ACTIVE)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  subscriptions Subscription[]
+  memberships   OrganizationMember[]
+  invitations   OrganizationInvitation[]
+  refreshTokens RefreshToken[]
+
+  @@map("organizations")
+}
+
+model Subscription {
+  id             Int                @id @default(autoincrement())
+  organizationId Int                @map("organization_id")
+  planId         Int                @map("plan_id")
+  startDate      DateTime           @map("start_date") @db.Date
+  endDate        DateTime?          @map("end_date") @db.Date
+  status         SubscriptionStatus @default(ACTIVE)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([planId])
+  @@map("subscriptions")
+}
+
+/// Login identity. One account can belong to several organizations.
+model Account {
+  id              Int       @id @default(autoincrement())
+  /// Stored lowercase.
+  email           String    @unique @db.VarChar(150)
+  name            String    @db.VarChar(120)
+  /// Argon2id hash. NULL = the account cannot log in until a password is set.
+  passwordHash    String?   @map("password_hash") @db.VarChar(255)
+  /// NULL = the owner has not confirmed the email yet and cannot log in.
+  /// Invited accounts are verified when they accept (the emailed token proves the address).
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  memberships     OrganizationMember[]
+  sentInvitations OrganizationInvitation[]
+  refreshTokens   RefreshToken[]
+  tokens          AccountToken[]
+
+  @@map("accounts")
+}
+
+/// Account ←→ organization (N:M). Every request must find an ACTIVE membership
+/// before using the organization's tenant schema.
+model OrganizationMember {
+  accountId      Int              @map("account_id")
+  organizationId Int              @map("organization_id")
+  status         MembershipStatus @default(INVITED)
+  /// Set when the invitation is accepted.
+  joinedAt       DateTime?        @map("joined_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([accountId, organizationId])
+  @@index([organizationId])
+  @@map("organization_members")
+}
+
+/// Invitation for an email to join an organization. Only the SHA-256 of the token is stored.
+/// One pending invitation per (organization, email) — partial unique index in the migration.
+model OrganizationInvitation {
+  id                 Int       @id @default(autoincrement())
+  organizationId     Int       @map("organization_id")
+  /// Stored lowercase.
+  email              String    @db.VarChar(150)
+  /// Logical reference to `roles.id` in the organization's tenant schema (no FK: crosses schemas).
+  roleId             Int       @map("role_id")
+  /// Logical reference to `warehouses.id` in the tenant schema; NULL = every warehouse.
+  warehouseId        Int?      @map("warehouse_id")
+  invitedByAccountId Int       @map("invited_by_account_id")
+  tokenHash          String    @unique @map("token_hash") @db.Char(64)
+  expiresAt          DateTime  @map("expires_at") @db.Timestamptz
+  acceptedAt         DateTime? @map("accepted_at") @db.Timestamptz
+  revokedAt          DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    Account      @relation(fields: [invitedByAccountId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([invitedByAccountId])
+  @@map("organization_invitations")
+}
+
+/// Refresh token of a login session, bound to one organization. Only the SHA-256 is stored.
+/// Rotated on every use; reusing a revoked token revokes every session of (account, organization).
+model RefreshToken {
+  id             Int       @id @default(autoincrement())
+  accountId      Int       @map("account_id")
+  organizationId Int       @map("organization_id")
+  tokenHash      String    @unique @map("token_hash") @db.Char(64)
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, organizationId])
+  @@index([organizationId])
+  @@map("refresh_tokens")
+}
+
+/// Single-use token emailed to an account (email verification). Only the SHA-256 is stored.
+model AccountToken {
+  id        Int                 @id @default(autoincrement())
+  accountId Int                 @map("account_id")
+  purpose   AccountTokenPurpose
+  tokenHash String              @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime            @map("expires_at") @db.Timestamptz
+  usedAt    DateTime?           @map("used_at") @db.Timestamptz
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, purpose])
+  @@map("account_tokens")
+}
