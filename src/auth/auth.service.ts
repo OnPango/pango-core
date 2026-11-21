@@ -21,6 +21,10 @@ import {
   verifyPassword,
 } from './secrets.js';
 import { TokenService } from './token.service.js';
+import {
+  type IssuedTrust,
+  TrustedDeviceService,
+} from './trusted-device.service.js';
 
 export interface SessionResponse extends SessionProfile {
   tokenType: 'Bearer';
@@ -67,6 +71,7 @@ export class AuthService {
     private readonly provisioning: ProvisioningService,
     private readonly verification: EmailVerificationService,
     private readonly loginCodes: LoginCodeService,
+    private readonly trustedDevices: TrustedDeviceService,
   ) {}
 
   /**
@@ -154,9 +159,14 @@ export class AuthService {
    * NOT_A_MEMBER), then emails a code (`verifyLoginCode` completes it). With the code
    * disabled, it opens the session at once.
    */
+  /**
+   * First step: the password. A browser trusted after an earlier code (`deviceToken`, the
+   * `pango_device_<subdomain>` cookie) gets the session at once; any other gets a code.
+   */
   async login(
     subdomain: string | null,
     dto: LoginDto,
+    deviceToken: string | null = null,
   ): Promise<SessionResponse | StartedLoginChallenge> {
     if (!subdomain) throw authErrors.tenantRequired();
     const organization = await this.access.findActiveOrganization(subdomain);
@@ -166,7 +176,11 @@ export class AuthService {
     const valid = await verifyPassword(account?.passwordHash, dto.password);
     if (!account || !valid) throw authErrors.invalidCredentials();
     if (!account.emailVerifiedAt) throw authErrors.emailNotVerified();
-    if (!this.loginCodes.enabled) {
+    if (
+      !this.loginCodes.enabled ||
+      this.trustedDevices.isTrusted(deviceToken, account, organization.id)
+    ) {
+      // createSession runs every access check (membership, suspension…).
       return this.createSession(account.id, organization.id);
     }
     // Every other check (membership, suspension…) before emailing a code.
@@ -174,12 +188,16 @@ export class AuthService {
     return this.loginCodes.start(context);
   }
 
-  /** Second step: the emailed code of the pending login opens the session. */
+  /**
+   * Second step: the emailed code of the pending login opens the session and trusts the browser
+   * for a while (longer with `rememberDevice`), so the next logins ask for the password only.
+   */
   async verifyLoginCode(
     subdomain: string | null,
     challengeToken: string | null,
     code: string,
-  ): Promise<SessionResponse> {
+    rememberDevice = false,
+  ): Promise<{ session: SessionResponse; trust: IssuedTrust | null }> {
     if (!subdomain) throw authErrors.tenantRequired();
     if (!challengeToken) throw authErrors.loginChallengeInvalid();
     const { accountId, organizationId } = await this.loginCodes.verify(
@@ -187,7 +205,17 @@ export class AuthService {
       challengeToken,
       code,
     );
-    return this.createSession(accountId, organizationId);
+    const session = await this.createSession(accountId, organizationId);
+    const account = await this.control.account.findUniqueOrThrow({
+      where: { id: accountId },
+      select: { id: true, passwordHash: true },
+    });
+    const trust = this.trustedDevices.issue(
+      account,
+      organizationId,
+      rememberDevice,
+    );
+    return { session, trust };
   }
 
   /** Emails another code for the pending login. */

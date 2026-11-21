@@ -78,7 +78,7 @@ Creates the account, the organization and its tenant schema in one transaction (
 
 ### Login — two steps (organization subdomain)
 
-The password alone does not open a session: a six-digit code emailed to the account completes the login.
+The password alone does not open a session: a six-digit code emailed to the account completes the login. After the code, the browser is trusted for a while and the next logins ask for the password only ([Trusted devices](#trusted-devices)).
 
 #### 1. `POST /auth/login`
 
@@ -95,7 +95,7 @@ The password alone does not open a session: a six-digit code emailed to the acco
 | Membership is not suspended | `403 MEMBERSHIP_SUSPENDED` |
 | Tenant user is active | `403 USER_DISABLED` |
 
-Every check passes before any email goes out. Then the API emails a code and answers `202` without a session:
+Every check passes before any email goes out. A [trusted browser](#trusted-devices) gets the session at once (`200`). Otherwise the API emails a code and answers `202` without a session:
 
 ```json
 {
@@ -104,7 +104,9 @@ Every check passes before any email goes out. Then the API emails a code and ans
   "codeLength": 6,
   "expiresAt": "2026-11-19T15:10:00.000Z",
   "resendAvailableAt": "2026-11-19T15:01:00.000Z",
-  "emailSent": true
+  "emailSent": true,
+  "trustedDeviceHours": 12,
+  "rememberDeviceDays": 30
 }
 ```
 
@@ -116,7 +118,7 @@ Every check passes before any email goes out. Then the API emails a code and ans
 
 #### 2. `POST /auth/login/verify`
 
-`{ "code": "482193" }`, with the `pango_login_<subdomain>` cookie. The right code opens the session (the [session response](#session-response) and its cookies) and clears the login cookie. A code works once.
+`{ "code": "482193", "rememberDevice": false }`, with the `pango_login_<subdomain>` cookie. The right code opens the session (the [session response](#session-response) and its cookies), clears the login cookie and trusts the browser ([Trusted devices](#trusted-devices); `rememberDevice: true` for longer). A code works once.
 
 | Case | Error |
 |---|---|
@@ -130,6 +132,15 @@ The checks of the session (membership, suspension, …) run again when it opens.
 #### Another code — `POST /auth/login/resend`
 
 No body, with the `pango_login_<subdomain>` cookie. Emails a new code (the previous one stops working, the attempts start again) and answers `202` with the same body as the login. At most one per `LOGIN_CODE_RESEND_SECONDS` (default 60; `429 LOGIN_CODE_RESEND_TOO_SOON` with `retryAfterSeconds`) and `LOGIN_CODE_MAX_SENDS` per login (default 5, the first one included; then `429 LOGIN_CODE_RESEND_LIMIT` and the user logs in again).
+
+#### Trusted devices
+
+So that logging out by accident, or coming back the next day, does not ask for another code:
+
+- The right code sets the HttpOnly cookie `pango_device_<subdomain>` (path `/auth/login`, so only the login reads it). While it lasts, `POST /auth/login` with the same account in the same organization answers `200` with the session after the password, without a code. The password and every other check of the table above still apply.
+- It lasts `LOGIN_TRUSTED_DEVICE_HOURS` (default 12) after every code, or `LOGIN_REMEMBER_DEVICE_DAYS` (default 30) when the user asks to be remembered (`rememberDevice: true`). `LOGIN_TRUSTED_DEVICE_HOURS=0` asks for the code every time unless the user asks to be remembered. The login body tells the frontend both values (`trustedDeviceHours`, `rememberDeviceDays`).
+- The cookie holds `<account>.<organization>.<expiry>.<signature>`, an HMAC-SHA256 keyed with `JWT_SECRET` over those values and the account's password hash. Nothing is stored: changing the password ends every trust of the account, and rotating `JWT_SECRET` ends them all. It cannot be stretched or moved to another account or organization.
+- Logging out keeps the cookie (that is the point). Another account logging in on the same browser gets the code and, after it, replaces the cookie.
 
 Signing up with an already verified account and accepting an invitation still open a session directly: the invitation email already proves the address. `POST /auth/refresh` keeps a session alive without the code.
 

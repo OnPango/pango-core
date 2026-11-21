@@ -12,6 +12,8 @@ export const REFRESH_COOKIE_PATH = '/auth';
 // The pending login (second step) is only read by /auth/login/verify and /resend.
 export const LOGIN_COOKIE_PREFIX = `${SESSION_COOKIE_PREFIX}login_`;
 export const LOGIN_COOKIE_PATH = '/auth/login';
+// A trusted device skips the emailed code; only the login reads it, so it shares that path.
+export const DEVICE_COOKIE_PREFIX = `${SESSION_COOKIE_PREFIX}device_`;
 
 /** What a session endpoint returns: both tokens travel only in cookies. */
 export type SessionBody = Omit<
@@ -57,6 +59,30 @@ export class SessionCookies {
 
   static loginName(subdomain: string): string {
     return `${LOGIN_COOKIE_PREFIX}${subdomain}`;
+  }
+
+  static deviceName(subdomain: string): string {
+    return `${DEVICE_COOKIE_PREFIX}${subdomain}`;
+  }
+
+  /**
+   * Marks the browser as trusted for logins to this organization. Logging out keeps it: that
+   * is the point (an accidental logout does not ask for another code).
+   */
+  issueTrustedDevice(
+    response: Response,
+    subdomain: string,
+    token: string,
+    maxAgeMs: number,
+  ): void {
+    response.cookie(SessionCookies.deviceName(subdomain), token, {
+      ...this.loginOptions(),
+      maxAge: maxAgeMs,
+    });
+  }
+
+  readTrustedDevice(request: Request, subdomain: string): string | null {
+    return readCookie(request, SessionCookies.deviceName(subdomain));
   }
 
   /** Holds the token of a pending login until its code is entered. */

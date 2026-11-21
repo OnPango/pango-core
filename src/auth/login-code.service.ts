@@ -12,6 +12,7 @@ import {
   sameDigest,
 } from './secrets.js';
 import { positiveInt } from './token.service.js';
+import { TrustedDeviceService } from './trusted-device.service.js';
 
 export const LOGIN_CODE_LENGTH = 6;
 
@@ -27,6 +28,10 @@ export interface LoginChallengeState {
   resendAvailableAt: Date;
   /** False if the email could not be sent; POST /auth/login/resend retries. */
   emailSent: boolean;
+  /** After the code, this browser is not asked again for this long (0: it is asked every time)… */
+  trustedDeviceHours: number;
+  /** …or for this long, when the user asks to be remembered (`rememberDevice`). */
+  rememberDeviceDays: number;
 }
 
 export interface StartedLoginChallenge {
@@ -67,6 +72,7 @@ export class LoginCodeService {
     config: ConfigService,
     private readonly control: ControlPrismaService,
     private readonly mail: MailService,
+    private readonly trustedDevices: TrustedDeviceService,
   ) {
     this.enabled = config.get<string>('LOGIN_EMAIL_CODE_ENABLED') !== 'false';
     this.ttlMs = positiveInt(config, 'LOGIN_CODE_TTL_MINUTES', 10) * 60_000;
@@ -263,6 +269,7 @@ export class LoginCodeService {
         challenge.lastSentAt.getTime() + this.resendCooldownMs,
       ),
       emailSent,
+      ...this.trustedDevices.durations,
     };
   }
 
