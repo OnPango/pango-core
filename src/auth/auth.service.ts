@@ -10,6 +10,11 @@ import { authErrors } from './auth-errors.js';
 import type { LoginDto, SignupDto } from './dto.js';
 import { EmailVerificationService } from './email-verification.service.js';
 import {
+  type LoginChallengeState,
+  LoginCodeService,
+  type StartedLoginChallenge,
+} from './login-code.service.js';
+import {
   generateOpaqueToken,
   hashPassword,
   hashToken,
@@ -61,6 +66,7 @@ export class AuthService {
     private readonly tokens: TokenService,
     private readonly provisioning: ProvisioningService,
     private readonly verification: EmailVerificationService,
+    private readonly loginCodes: LoginCodeService,
   ) {}
 
   /**
@@ -143,10 +149,15 @@ export class AuthService {
   }
 
   /**
-   * Logs in to the organization of `subdomain`. Valid credentials of an account
-   * that is not a member of that organization are rejected with NOT_A_MEMBER.
+   * First step of the login to the organization of `subdomain`: checks the password and
+   * that the account may enter (valid credentials of a non-member are rejected with
+   * NOT_A_MEMBER), then emails a code (`verifyLoginCode` completes it). With the code
+   * disabled, it opens the session at once.
    */
-  async login(subdomain: string | null, dto: LoginDto) {
+  async login(
+    subdomain: string | null,
+    dto: LoginDto,
+  ): Promise<SessionResponse | StartedLoginChallenge> {
     if (!subdomain) throw authErrors.tenantRequired();
     const organization = await this.access.findActiveOrganization(subdomain);
     const account = await this.control.account.findUnique({
@@ -155,7 +166,38 @@ export class AuthService {
     const valid = await verifyPassword(account?.passwordHash, dto.password);
     if (!account || !valid) throw authErrors.invalidCredentials();
     if (!account.emailVerifiedAt) throw authErrors.emailNotVerified();
-    return this.createSession(account.id, organization.id);
+    if (!this.loginCodes.enabled) {
+      return this.createSession(account.id, organization.id);
+    }
+    // Every other check (membership, suspension…) before emailing a code.
+    const context = await this.access.loadContext(account.id, organization.id);
+    return this.loginCodes.start(context);
+  }
+
+  /** Second step: the emailed code of the pending login opens the session. */
+  async verifyLoginCode(
+    subdomain: string | null,
+    challengeToken: string | null,
+    code: string,
+  ): Promise<SessionResponse> {
+    if (!subdomain) throw authErrors.tenantRequired();
+    if (!challengeToken) throw authErrors.loginChallengeInvalid();
+    const { accountId, organizationId } = await this.loginCodes.verify(
+      subdomain,
+      challengeToken,
+      code,
+    );
+    return this.createSession(accountId, organizationId);
+  }
+
+  /** Emails another code for the pending login. */
+  resendLoginCode(
+    subdomain: string | null,
+    challengeToken: string | null,
+  ): Promise<LoginChallengeState> {
+    if (!subdomain) throw authErrors.tenantRequired();
+    if (!challengeToken) throw authErrors.loginChallengeInvalid();
+    return this.loginCodes.resend(subdomain, challengeToken);
   }
 
   /**

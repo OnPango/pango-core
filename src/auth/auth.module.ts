@@ -6,6 +6,7 @@ import { AuthGuard } from './auth.guard.js';
 import { CsrfGuard } from './csrf.guard.js';
 import { AuthService } from './auth.service.js';
 import { EmailVerificationService } from './email-verification.service.js';
+import { LoginCodeService } from './login-code.service.js';
 import { SessionCookies } from './session-cookies.js';
 import { TokenService } from './token.service.js';
 
@@ -15,6 +16,7 @@ import { TokenService } from './token.service.js';
     AccessService,
     AuthService,
     EmailVerificationService,
+    LoginCodeService,
     SessionCookies,
     TokenService,
     // Global guards run in this order: CSRF check before authentication.

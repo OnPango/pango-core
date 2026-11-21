@@ -57,3 +57,26 @@ export function emailVerificationEmail(params: {
 <p>This link expires on ${escapeHtml(expires)}. If you did not sign up, ignore this email.</p>`;
   return { to: params.to, subject, html, text };
 }
+
+export function loginCodeEmail(params: {
+  to: string;
+  name: string;
+  organizationName: string;
+  code: string;
+  expiresInMinutes: number;
+}): MailMessage {
+  const { name, organizationName, code, expiresInMinutes } = params;
+  const subject = `${code} is your Pango login code`;
+  const text = [
+    `Hi ${name},`,
+    '',
+    `Use this code to finish logging in to ${organizationName} on Pango: ${code}`,
+    '',
+    `It expires in ${expiresInMinutes} minutes and works once. If you did not try to log in, change your password: someone knows it.`,
+  ].join('\n');
+  const html = `<p>Hi ${escapeHtml(name)},</p>
+<p>Use this code to finish logging in to <strong>${escapeHtml(organizationName)}</strong> on Pango:</p>
+<p style="font-size:28px;font-weight:700;letter-spacing:6px;font-family:monospace">${escapeHtml(code)}</p>
+<p>It expires in ${expiresInMinutes} minutes and works once. If you did not try to log in, change your password: someone knows it.</p>`;
+  return { to: params.to, subject, html, text };
+}
