@@ -93,7 +93,8 @@ export class WarehousesController {
     summary: 'Edit a warehouse',
     description:
       'Same validations as creating. `isActive: false` closes it (warehouses are never ' +
-      `deleted) and requires no stock on hand. ${requiresPermissions('warehouse.manage')}`,
+      'deleted) and requires no stock on hand and no transfers in transit to or from it. ' +
+      requiresPermissions('warehouse.manage'),
   })
   @idParam
   @ApiOkResponse({ type: WarehouseDto })
@@ -106,6 +107,7 @@ export class WarehousesController {
         'WAREHOUSE_CODE_TAKEN',
         'WAREHOUSE_NAME_TAKEN',
         'WAREHOUSE_HAS_STOCK',
+        'WAREHOUSE_HAS_TRANSFERS_IN_TRANSIT',
       ],
     },
   })

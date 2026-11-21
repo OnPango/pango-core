@@ -16,6 +16,7 @@ import {
   type ListMovementsQueryDto,
   type ListMovementTypesQueryDto,
   type MovementLineInputDto,
+  type ReceiveTransferDto,
 } from './dto.js';
 import { movementErrors } from './movement-errors.js';
 import type {
@@ -48,6 +49,7 @@ const movementInclude = {
   },
   department: { select: { id: true, name: true } },
   registeredBy: { select: { id: true, accountId: true } },
+  receivedBy: { select: { id: true, accountId: true } },
   lines: {
     orderBy: { lineNumber: 'asc' },
     include: {
@@ -95,6 +97,16 @@ export interface MovementRecord {
   notes?: string | null;
 }
 
+type Nature = 'INBOUND' | 'OUTBOUND' | 'TRANSFER' | 'ADJUSTMENT';
+
+/** Stock arriving at a location of a warehouse. */
+interface Arrival {
+  productId: number;
+  locationId: number;
+  lotId: number | null;
+  quantity: Decimal;
+}
+
 /** Movement number shown to users, derived from its id. */
 export const movementNumber = (id: number) =>
   `MV-${String(id).padStart(8, '0')}`;
@@ -140,9 +152,13 @@ function registrableBy(
   };
 }
 
-/** Effect of a line by the type's nature (adjustments carry their own direction). */
+/**
+ * Effect of a line by the type's nature (adjustments carry their own direction).
+ * A transfer line takes stock out of its origin; it arrives at the destination
+ * when the transfer is received.
+ */
 export function lineEffect(
-  nature: 'INBOUND' | 'OUTBOUND' | 'ADJUSTMENT',
+  nature: Nature,
   direction: AdjustmentDirection | undefined,
   lineNumber: number,
 ): Effect {
@@ -152,6 +168,63 @@ export function lineEffect(
   }
   if (direction) throw movementErrors.directionNotAllowed(lineNumber);
   return nature === 'INBOUND' ? 'IN' : 'OUT';
+}
+
+/** Whether the user holds `movement.read` in any of the warehouses. */
+function canRead(auth: AuthContext, warehouseIds: number[]): boolean {
+  return warehouseIds.some((id) =>
+    permissionsInWarehouse(auth.user.roles, id).has('movement.read'),
+  );
+}
+
+/** Transfer-only fields on another kind of movement. */
+function assertNoTransferFields(dto: CreateMovementDto) {
+  if (
+    dto.destinationWarehouseId !== undefined ||
+    dto.receiveNow !== undefined
+  ) {
+    throw movementErrors.transferFieldsNotAllowed();
+  }
+  dto.lines.forEach((line, index) => {
+    if (line.destinationLocationId !== undefined) {
+      throw movementErrors.destinationLocationNotAllowed(index + 1);
+    }
+  });
+}
+
+/** The ids among `ids` that are active locations of the warehouse. */
+async function activeLocations(
+  tenant: Tx,
+  warehouseId: number,
+  ids: (number | undefined)[],
+): Promise<Set<number>> {
+  const wanted = [...new Set(ids.filter((id) => id !== undefined))];
+  if (wanted.length === 0) return new Set();
+  const found = await tenant.location.findMany({
+    where: { id: { in: wanted }, warehouseId, isActive: true },
+    select: { id: true },
+  });
+  return new Set(found.map((l) => l.id));
+}
+
+/**
+ * Locks the products' rows (in id order, so concurrent movements never deadlock)
+ * and reads their average cost. Every change to stock goes through it.
+ */
+async function lockProducts(tx: Tx, schema: string, productIds: number[]) {
+  return tx.$queryRawUnsafe<{ id: number; averageCost: string }[]>(
+    `SELECT "id", "average_cost"::text AS "averageCost" FROM "${schema}"."products"
+      WHERE "id" = ANY($1::int[]) ORDER BY "id" FOR UPDATE`,
+    [...productIds].sort((a, b) => a - b),
+  );
+}
+
+/** Takes the next movement id, so the number can be derived from it. */
+async function nextMovementId(tx: Tx, schema: string): Promise<number> {
+  const [{ id }] = await tx.$queryRawUnsafe<{ id: number }[]>(
+    `SELECT nextval(pg_get_serial_sequence('"${schema}"."movements"', 'id'))::int AS "id"`,
+  );
+  return id;
 }
 
 /** Weighted average cost after adding `quantity` at `unitCost`. */
@@ -173,6 +246,8 @@ export function weightedAverage(
 // CU-05 (US-12, US-13, US-14): inbound, outbound and adjustment movements. A
 // movement is registered already confirmed: its lines and the stock balances
 // change in one transaction, and it is never edited or deleted (RN-006).
+// CU-16: transfers between warehouses leave the origin and either arrive at once
+// or stay IN_TRANSIT until the destination receives them.
 // Stock cannot go negative (RN-005) unless `settings.allow_negative_stock`.
 // Each movement re-evaluates the replenishment alerts it affects (CU-12a).
 @Injectable()
@@ -220,9 +295,25 @@ export class MovementsService {
       warehouseIds = [query.warehouseId];
     }
     if (warehouseIds?.length === 0) return empty;
+    const destination = query.destinationWarehouseId;
+    if (
+      destination !== undefined &&
+      visible !== 'ALL' &&
+      !visible.includes(destination)
+    ) {
+      return empty;
+    }
 
     const and: Prisma.MovementWhereInput[] = [];
     if (warehouseIds) and.push(inWarehouses(warehouseIds));
+    if (destination !== undefined) {
+      and.push({
+        lines: {
+          some: { destinationLocation: { warehouseId: destination } },
+        },
+      });
+    }
+    if (query.status) and.push({ status: query.status });
     if (query.productId !== undefined) {
       and.push({ lines: { some: { productId: query.productId } } });
     }
@@ -255,13 +346,9 @@ export class MovementsService {
     });
     if (!movement) throw movementErrors.notFound();
     const [dto] = await this.toDtos([movement]);
-    if (
-      !permissionsInWarehouse(auth.user.roles, dto.warehouse.id).has(
-        'movement.read',
-      )
-    ) {
-      throw movementErrors.notFound();
-    }
+    const warehouses = [dto.warehouse.id];
+    if (dto.destinationWarehouse) warehouses.push(dto.destinationWarehouse.id);
+    if (!canRead(auth, warehouses)) throw movementErrors.notFound();
     return dto;
   }
 
@@ -284,7 +371,8 @@ export class MovementsService {
     if (!warehouse?.isActive) throw movementErrors.warehouseInvalid();
     if (!type) throw movementErrors.typeInvalid();
     const nature = type.nature;
-    if (nature === 'TRANSFER') throw movementErrors.typeNotSupported();
+    const transfer = nature === 'TRANSFER';
+    if (!transfer) assertNoTransferFields(dto);
 
     const allowed = await tenant.movementType.findFirst({
       where: { id: type.id, ...registrableBy(auth.user.id, warehouse.id) },
@@ -293,10 +381,16 @@ export class MovementsService {
     if (!allowed) throw movementErrors.typeNotAllowed();
 
     if (dto.departmentId !== undefined) {
+      if (transfer) throw movementErrors.departmentNotAllowed();
       const department = await tenant.department.findUnique({
         where: { id: dto.departmentId },
       });
       if (!department?.isActive) throw movementErrors.departmentInvalid();
+    }
+
+    const allowNegative = settings?.allowNegativeStock ?? false;
+    if (transfer) {
+      return this.createTransfer(auth, dto, warehouse, type.id, allowNegative);
     }
 
     const lines = await this.planLines(tenant, warehouse.id, nature, dto.lines);
@@ -308,7 +402,7 @@ export class MovementsService {
           registeredById: auth.user.id,
           warehouse,
           lines,
-          allowNegative: settings?.allowNegativeStock ?? false,
+          allowNegative,
           departmentId: dto.departmentId ?? null,
           documentRef: dto.documentRef || null,
           notes: dto.notes || null,
@@ -316,6 +410,278 @@ export class MovementsService {
       { timeout: 20_000 },
     );
 
+    return this.getById(tenant, id);
+  }
+
+  /**
+   * CU-16: the stock leaves the origin now. With `receiveNow` it arrives at the
+   * destination in the same transaction; otherwise it stays in transit (on no
+   * warehouse's balance) until `receive`.
+   */
+  private async createTransfer(
+    auth: AuthContext,
+    dto: CreateMovementDto,
+    origin: { id: number; defaultLocationId: number | null },
+    movementTypeId: number,
+    allowNegative: boolean,
+  ): Promise<MovementDto> {
+    const destinationId = dto.destinationWarehouseId;
+    if (destinationId === undefined) throw movementErrors.destinationRequired();
+    if (destinationId === origin.id) throw movementErrors.sameWarehouse();
+    const receiveNow = dto.receiveNow ?? false;
+    if (
+      receiveNow &&
+      !permissionsInWarehouse(auth.user.roles, destinationId).has(
+        'movement.receive',
+      )
+    ) {
+      throw authErrors.forbidden();
+    }
+
+    const tenant = this.tenant(auth);
+    const destination = await tenant.warehouse.findUnique({
+      where: { id: destinationId },
+    });
+    if (!destination?.isActive) throw movementErrors.destinationInvalid();
+
+    const lines = await this.planLines(
+      tenant,
+      origin.id,
+      'TRANSFER',
+      dto.lines,
+    );
+    const valid = await activeLocations(
+      tenant,
+      destination.id,
+      dto.lines.map((l) => l.destinationLocationId),
+    );
+    dto.lines.forEach((line, index) => {
+      const chosen = line.destinationLocationId;
+      if (chosen !== undefined && !valid.has(chosen)) {
+        throw movementErrors.destinationLocationInvalid(index + 1);
+      }
+    });
+
+    const schema = assertTenantSchema(auth.organization.schemaName);
+    const id = await tenant.$transaction(
+      async (tx) => {
+        const { resolved, productWarehouseIds } = await this.applyLines(
+          tx,
+          schema,
+          { warehouse: origin, lines, allowNegative },
+        );
+
+        // Where each line arrives: the chosen location, or the product's default
+        // location in the destination, or the destination's default location.
+        const enabled = await tx.productWarehouse.findMany({
+          where: {
+            warehouseId: destination.id,
+            productId: { in: resolved.map((l) => l.productId) },
+          },
+          select: { productId: true, defaultLocationId: true },
+        });
+        const defaults = new Map(
+          enabled.map((pw) => [pw.productId, pw.defaultLocationId]),
+        );
+        const arriving = resolved.map((line) => {
+          const locationId =
+            dto.lines[line.lineNumber - 1].destinationLocationId ??
+            defaults.get(line.productId) ??
+            destination.defaultLocationId;
+          if (locationId === null) {
+            throw movementErrors.destinationLocationInvalid(line.lineNumber);
+          }
+          return { ...line, destinationLocationId: locationId };
+        });
+
+        const affected = [...productWarehouseIds];
+        if (receiveNow) {
+          affected.push(
+            ...(await this.addToWarehouse(
+              tx,
+              schema,
+              destination.id,
+              arriving.map((line) => ({
+                productId: line.productId,
+                locationId: line.destinationLocationId,
+                lotId: line.lotId,
+                quantity: line.quantity,
+              })),
+            )),
+          );
+        }
+        await evaluateAlerts(tx, affected);
+
+        const id = await nextMovementId(tx, schema);
+        await tx.movement.create({
+          data: {
+            id,
+            number: movementNumber(id),
+            movementTypeId,
+            registeredById: auth.user.id,
+            status: receiveNow ? 'CONFIRMED' : 'IN_TRANSIT',
+            receivedById: receiveNow ? auth.user.id : null,
+            receivedAt: receiveNow ? new Date() : null,
+            documentRef: dto.documentRef || null,
+            notes: dto.notes || null,
+            lines: {
+              create: arriving.map((line) => ({
+                lineNumber: line.lineNumber,
+                productId: line.productId,
+                originLocationId: line.locationId,
+                destinationLocationId: line.destinationLocationId,
+                lotId: line.lotId,
+                quantity: line.quantity,
+                receivedQuantity: receiveNow ? line.quantity : null,
+                unitCost: line.unitCost,
+              })),
+            },
+          },
+        });
+        return id;
+      },
+      { timeout: 20_000 },
+    );
+    return this.getById(tenant, id);
+  }
+
+  /**
+   * CU-16: the destination receives a transfer in transit. Each line adds what
+   * arrived (all of it unless `dto.lines` says otherwise) at its destination
+   * location; anything short is lost in transit and does not return to the origin.
+   */
+  async receive(
+    auth: AuthContext,
+    id: number,
+    dto: ReceiveTransferDto,
+  ): Promise<MovementDto> {
+    const tenant = this.tenant(auth);
+    const movement = await tenant.movement.findUnique({
+      where: { id },
+      select: {
+        status: true,
+        movementType: { select: { nature: true } },
+        lines: {
+          orderBy: { lineNumber: 'asc' },
+          select: {
+            lineNumber: true,
+            productId: true,
+            lotId: true,
+            quantity: true,
+            destinationLocationId: true,
+            originLocation: { select: { warehouseId: true } },
+            destinationLocation: { select: { warehouseId: true } },
+          },
+        },
+      },
+    });
+    const first = movement?.lines[0];
+    const warehouses = [
+      first?.originLocation?.warehouseId,
+      first?.destinationLocation?.warehouseId,
+    ].filter((w) => w !== undefined);
+    if (!movement || !canRead(auth, warehouses)) {
+      throw movementErrors.notFound();
+    }
+    const destinationId = first?.destinationLocation?.warehouseId;
+    if (
+      movement.movementType.nature !== 'TRANSFER' ||
+      movement.status !== 'IN_TRANSIT' ||
+      destinationId === undefined
+    ) {
+      throw movementErrors.notInTransit();
+    }
+    if (
+      !permissionsInWarehouse(auth.user.roles, destinationId).has(
+        'movement.receive',
+      )
+    ) {
+      throw authErrors.forbidden();
+    }
+    const destination = await tenant.warehouse.findUnique({
+      where: { id: destinationId },
+    });
+    if (!destination?.isActive) throw movementErrors.destinationInvalid();
+
+    const sent = new Map(movement.lines.map((l) => [l.lineNumber, l]));
+    const changes = new Map<
+      number,
+      { quantity: Decimal; locationId?: number }
+    >();
+    for (const input of dto.lines ?? []) {
+      const line = sent.get(input.lineNumber);
+      if (!line || changes.has(input.lineNumber)) {
+        throw movementErrors.receiptLineInvalid(input.lineNumber);
+      }
+      const quantity = new Decimal(input.receivedQuantity);
+      if (quantity.gt(line.quantity)) {
+        throw movementErrors.receivedQuantityInvalid(input.lineNumber);
+      }
+      changes.set(input.lineNumber, { quantity, locationId: input.locationId });
+    }
+    const valid = await activeLocations(
+      tenant,
+      destinationId,
+      [...changes.values()].map((c) => c.locationId),
+    );
+    for (const [lineNumber, change] of changes) {
+      if (change.locationId !== undefined && !valid.has(change.locationId)) {
+        throw movementErrors.destinationLocationInvalid(lineNumber);
+      }
+    }
+
+    const receipt = movement.lines.map((line) => {
+      const change = changes.get(line.lineNumber);
+      return {
+        lineNumber: line.lineNumber,
+        productId: line.productId,
+        lotId: line.lotId,
+        quantity: change?.quantity ?? line.quantity,
+        locationId: change?.locationId ?? line.destinationLocationId!,
+      };
+    });
+
+    const schema = assertTenantSchema(auth.organization.schemaName);
+    await tenant.$transaction(
+      async (tx) => {
+        // Claiming the transfer first means two receipts can never both apply.
+        const claimed = await tx.movement.updateMany({
+          where: { id, status: 'IN_TRANSIT' },
+          data: {
+            status: 'CONFIRMED',
+            receivedById: auth.user.id,
+            receivedAt: new Date(),
+          },
+        });
+        if (claimed.count === 0) throw movementErrors.notInTransit();
+
+        await lockProducts(tx, schema, [
+          ...new Set(receipt.map((l) => l.productId)),
+        ]);
+        const affected = await this.addToWarehouse(
+          tx,
+          schema,
+          destinationId,
+          receipt.filter((l) => l.quantity.gt(0)),
+        );
+        for (const line of receipt) {
+          await tx.movementLine.update({
+            where: {
+              movementId_lineNumber: {
+                movementId: id,
+                lineNumber: line.lineNumber,
+              },
+            },
+            data: {
+              receivedQuantity: line.quantity,
+              destinationLocationId: line.locationId,
+            },
+          });
+        }
+        await evaluateAlerts(tx, affected);
+      },
+      { timeout: 20_000 },
+    );
     return this.getById(tenant, id);
   }
 
@@ -342,9 +708,7 @@ export class MovementsService {
     );
     // The products' rows are locked, so alerts cannot race.
     await evaluateAlerts(tx, productWarehouseIds);
-    const [{ id }] = await tx.$queryRawUnsafe<{ id: number }[]>(
-      `SELECT nextval(pg_get_serial_sequence('"${schema}"."movements"', 'id'))::int AS "id"`,
-    );
+    const id = await nextMovementId(tx, schema);
     await tx.movement.create({
       data: {
         id,
@@ -381,7 +745,7 @@ export class MovementsService {
   async planLines(
     tenant: Tx,
     warehouseId: number,
-    nature: 'INBOUND' | 'OUTBOUND' | 'ADJUSTMENT',
+    nature: Nature,
     inputLines: MovementLineInputDto[],
   ): Promise<PlannedLine[]> {
     const productIds = [...new Set(inputLines.map((l) => l.productId))];
@@ -448,13 +812,7 @@ export class MovementsService {
     const productIds = [...new Set(lines.map((l) => l.product.id))].sort(
       (a, b) => a - b,
     );
-    const locked = await tx.$queryRawUnsafe<
-      { id: number; averageCost: string }[]
-    >(
-      `SELECT "id", "average_cost"::text AS "averageCost" FROM "${schema}"."products"
-        WHERE "id" = ANY($1::int[]) ORDER BY "id" FOR UPDATE`,
-      productIds,
-    );
+    const locked = await lockProducts(tx, schema, productIds);
     const averageCost = new Map(
       locked.map((p) => [p.id, new Decimal(p.averageCost)]),
     );
@@ -486,6 +844,25 @@ export class MovementsService {
       );
       onHand.set(pw.productId, onHand.get(pw.productId)!.add(sum));
       if (pw.warehouseId === warehouse.id) inWarehouse.set(pw.productId, pw);
+    }
+    if (lines.some((l) => l.effect === 'IN' && l.unitCost !== undefined)) {
+      // Stock in transit is still the organization's: it weighs in the average.
+      const inTransit = await tx.movementLine.groupBy({
+        by: ['productId'],
+        where: {
+          productId: { in: productIds },
+          movement: { status: 'IN_TRANSIT' },
+        },
+        _sum: { quantity: true },
+      });
+      for (const row of inTransit) {
+        if (row._sum.quantity) {
+          onHand.set(
+            row.productId,
+            onHand.get(row.productId)!.add(row._sum.quantity),
+          );
+        }
+      }
     }
 
     const resolved: {
@@ -621,6 +998,45 @@ export class MovementsService {
     return { resolved, productWarehouseIds };
   }
 
+  /**
+   * Adds arriving stock to a warehouse, enabling the products there when needed,
+   * and returns the affected product-warehouses. The caller holds the products'
+   * row locks.
+   */
+  private async addToWarehouse(
+    tx: Tx,
+    schema: string,
+    warehouseId: number,
+    arrivals: Arrival[],
+  ): Promise<number[]> {
+    if (arrivals.length === 0) return [];
+    const productIds = [...new Set(arrivals.map((a) => a.productId))];
+    const existing = await tx.productWarehouse.findMany({
+      where: { warehouseId, productId: { in: productIds } },
+      select: { id: true, productId: true },
+    });
+    const pwByProduct = new Map(existing.map((pw) => [pw.productId, pw.id]));
+    for (const productId of productIds) {
+      if (pwByProduct.has(productId)) continue;
+      const created = await tx.productWarehouse.create({
+        data: { productId, warehouseId },
+        select: { id: true },
+      });
+      pwByProduct.set(productId, created.id);
+    }
+    for (const arrival of arrivals) {
+      await this.addToBalance(
+        tx,
+        schema,
+        pwByProduct.get(arrival.productId)!,
+        arrival.locationId,
+        arrival.lotId,
+        arrival.quantity,
+      );
+    }
+    return [...new Set(pwByProduct.values())];
+  }
+
   /** Adds a (possibly negative) quantity to a balance, creating it if needed. */
   private async addToBalance(
     tx: Tx,
@@ -647,7 +1063,13 @@ export class MovementsService {
   /** Joins movements with the names of the accounts that registered them. */
   private async toDtos(movements: MovementWithRefs[]): Promise<MovementDto[]> {
     const accountIds = [
-      ...new Set(movements.map((m) => m.registeredBy.accountId)),
+      ...new Set(
+        movements.flatMap((m) =>
+          m.receivedBy
+            ? [m.registeredBy.accountId, m.receivedBy.accountId]
+            : [m.registeredBy.accountId],
+        ),
+      ),
     ];
     const accounts =
       accountIds.length === 0
@@ -662,6 +1084,7 @@ export class MovementsService {
       const first = movement.lines[0];
       const location = first?.originLocation ?? first?.destinationLocation;
       if (!location) throw movementErrors.notFound();
+      const transfer = movement.movementType.nature === 'TRANSFER';
       return {
         id: movement.id,
         number: movement.number,
@@ -669,10 +1092,18 @@ export class MovementsService {
         source: movement.stockRequestId === null ? 'MANUAL' : 'STOCK_REQUEST',
         movementType: movement.movementType,
         warehouse: location.warehouse,
+        destinationWarehouse: transfer
+          ? (first.destinationLocation?.warehouse ?? null)
+          : null,
         registeredBy: {
           id: movement.registeredBy.id,
           name: names.get(movement.registeredBy.accountId) ?? null,
         },
+        receivedBy: movement.receivedBy && {
+          id: movement.receivedBy.id,
+          name: names.get(movement.receivedBy.accountId) ?? null,
+        },
+        receivedAt: movement.receivedAt,
         department: movement.department,
         documentRef: movement.documentRef,
         notes: movement.notes,
@@ -695,6 +1126,7 @@ export class MovementsService {
           },
           lot: line.lot,
           quantity: line.quantity.toNumber(),
+          receivedQuantity: line.receivedQuantity?.toNumber() ?? null,
           unitCost: line.unitCost.toNumber(),
         })),
       };

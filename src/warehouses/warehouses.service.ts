@@ -49,6 +49,12 @@ export const warehouseErrors = {
       'WAREHOUSE_HAS_STOCK',
       'A warehouse with stock on hand cannot be deactivated',
     ),
+  hasTransfersInTransit: () =>
+    apiError(
+      HttpStatus.CONFLICT,
+      'WAREHOUSE_HAS_TRANSFERS_IN_TRANSIT',
+      'A warehouse with transfers in transit, to or from it, cannot be deactivated',
+    ),
 };
 
 type Tx = Prisma.TransactionClient;
@@ -184,6 +190,9 @@ export class WarehousesService {
       if (!dto.isActive && (await this.hasStock(tenant, id))) {
         throw warehouseErrors.hasStock();
       }
+      if (!dto.isActive && (await this.hasTransfersInTransit(tenant, id))) {
+        throw warehouseErrors.hasTransfersInTransit();
+      }
       data.isActive = dto.isActive;
     }
     const statusChanged = data.isActive !== undefined;
@@ -256,5 +265,24 @@ export class WarehousesService {
       select: { id: true },
     });
     return balance !== null;
+  }
+
+  /** Transfers leaving or reaching the warehouse that are not received yet. */
+  private async hasTransfersInTransit(tenant: Tx, warehouseId: number) {
+    const transfer = await tenant.movement.findFirst({
+      where: {
+        status: 'IN_TRANSIT',
+        lines: {
+          some: {
+            OR: [
+              { originLocation: { warehouseId } },
+              { destinationLocation: { warehouseId } },
+            ],
+          },
+        },
+      },
+      select: { id: true },
+    });
+    return transfer !== null;
   }
 }

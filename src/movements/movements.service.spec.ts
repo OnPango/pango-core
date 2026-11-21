@@ -64,6 +64,8 @@ function storedMovement(overrides: Record<string, unknown> = {}) {
     },
     department: null,
     registeredBy: { id: 1, accountId: 1 },
+    receivedBy: null,
+    receivedAt: null,
     documentRef: null,
     notes: null,
     occurredAt: new Date('2026-11-06'),
@@ -80,6 +82,7 @@ function storedMovement(overrides: Record<string, unknown> = {}) {
         destinationLocation: { id: 7, code: 'DEFAULT', warehouse: north },
         lot: null,
         quantity: D(10),
+        receivedQuantity: null,
         unitCost: D(100),
       },
     ],
@@ -115,8 +118,13 @@ function setup(nature = 'INBOUND') {
       create: vi.fn().mockResolvedValue({ id: 9, defaultLocationId: null }),
     },
     lot: { upsert: vi.fn(), findUnique: vi.fn() },
+    movementLine: {
+      groupBy: vi.fn().mockResolvedValue([]),
+      update: vi.fn(),
+    },
     movement: {
       create: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       findUnique: vi.fn().mockResolvedValue(storedMovement()),
       findUniqueOrThrow: vi.fn().mockResolvedValue(storedMovement()),
       findMany: vi.fn().mockResolvedValue([]),
@@ -193,13 +201,28 @@ describe('MovementsService.create', () => {
     );
   });
 
-  it('rejects transfers and types the roles do not allow', async () => {
-    const transfer = setup('TRANSFER');
-    expect(await errorCode(transfer.service.create(clerk, receipt))).toBe(
-      'MOVEMENT_TYPE_NOT_SUPPORTED',
-    );
-
+  it('rejects types the roles do not allow and transfer fields elsewhere', async () => {
     const { tenant, service } = setup();
+    expect(
+      await errorCode(
+        service.create(clerk, {
+          movementTypeId: 2,
+          warehouseId: 1,
+          destinationWarehouseId: 2,
+          lines: [{ productId: 5, quantity: 1 }],
+        }),
+      ),
+    ).toBe('TRANSFER_FIELDS_NOT_ALLOWED');
+    expect(
+      await errorCode(
+        service.create(clerk, {
+          movementTypeId: 2,
+          warehouseId: 1,
+          lines: [{ productId: 5, quantity: 1, destinationLocationId: 20 }],
+        }),
+      ),
+    ).toBe('TRANSFER_FIELDS_NOT_ALLOWED');
+
     tenant.movementType.findFirst.mockResolvedValue(null);
     expect(await errorCode(service.create(clerk, receipt))).toBe(
       'MOVEMENT_TYPE_NOT_ALLOWED',
@@ -311,5 +334,224 @@ describe('MovementsService reads', () => {
     const page = await service.list(clerk, { warehouseId: 2 });
     expect(page).toEqual({ items: [], total: 0, page: 1, pageSize: 25 });
     expect(tenant.movement.findMany).not.toHaveBeenCalled();
+  });
+});
+
+const south = { id: 2, name: 'South' };
+
+/** North (1, location 7) holds 10 of product 5; South (2, location 20) has none. */
+function transferSetup() {
+  const ctx = setup('TRANSFER');
+  ctx.tenant.warehouse.findUnique.mockImplementation(
+    ({ where }: { where: { id: number } }) =>
+      Promise.resolve({
+        id: where.id,
+        isActive: true,
+        defaultLocationId: where.id === 1 ? 7 : 20,
+      }),
+  );
+  ctx.tenant.productWarehouse.findMany.mockImplementation(
+    ({ where }: { where: { warehouseId?: number } }) =>
+      Promise.resolve(
+        where.warehouseId === 2
+          ? []
+          : [
+              {
+                id: 9,
+                productId: 5,
+                warehouseId: 1,
+                defaultLocationId: null,
+                stockBalances: [{ quantity: D(10) }],
+              },
+            ],
+      ),
+  );
+  ctx.tenant.productWarehouse.create.mockResolvedValue({
+    id: 11,
+    defaultLocationId: null,
+  });
+  return ctx;
+}
+
+const transferOf = (overrides: Partial<CreateMovementDto> = {}) => ({
+  movementTypeId: 4,
+  warehouseId: 1,
+  destinationWarehouseId: 2,
+  lines: [{ productId: 5, quantity: 4 }],
+  ...overrides,
+});
+
+const balanceInserts = (tenant: ReturnType<typeof setup>['tenant']) =>
+  tenant.$executeRawUnsafe.mock.calls.filter(([sql]) =>
+    String(sql).includes('INSERT'),
+  );
+
+describe('MovementsService transfers', () => {
+  it('validates the destination', async () => {
+    const { service } = transferSetup();
+    expect(
+      await errorCode(
+        service.create(
+          clerk,
+          transferOf({ destinationWarehouseId: undefined }),
+        ),
+      ),
+    ).toBe('DESTINATION_WAREHOUSE_REQUIRED');
+    expect(
+      await errorCode(
+        service.create(clerk, transferOf({ destinationWarehouseId: 1 })),
+      ),
+    ).toBe('SAME_WAREHOUSE');
+    expect(
+      await errorCode(service.create(clerk, transferOf({ departmentId: 4 }))),
+    ).toBe('DEPARTMENT_NOT_ALLOWED');
+  });
+
+  it('takes the stock out of the origin and leaves it in transit', async () => {
+    const { tenant, service } = transferSetup();
+
+    await service.create(clerk, transferOf());
+
+    expect(tenant.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('"quantity" >= $4::numeric'),
+      9,
+      7,
+      null,
+      '4',
+    );
+    expect(balanceInserts(tenant)).toHaveLength(0);
+    const data = tenant.movement.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      status: 'IN_TRANSIT',
+      receivedById: null,
+      receivedAt: null,
+    });
+    expect(data.lines.create[0]).toMatchObject({
+      originLocationId: 7,
+      destinationLocationId: 20,
+      receivedQuantity: null,
+    });
+    expect(evaluateAlerts).toHaveBeenLastCalledWith(tenant, [9]);
+  });
+
+  it('rejects a transfer without enough stock at the origin', async () => {
+    const { tenant, service } = transferSetup();
+    tenant.$executeRawUnsafe.mockResolvedValue(0);
+    expect(await errorCode(service.create(clerk, transferOf()))).toBe(
+      'INSUFFICIENT_STOCK',
+    );
+    expect(tenant.movement.create).not.toHaveBeenCalled();
+  });
+
+  it('receives at once only with movement.receive in the destination', async () => {
+    const { tenant, service } = transferSetup();
+    expect(
+      await errorCode(service.create(clerk, transferOf({ receiveNow: true }))),
+    ).toBe('FORBIDDEN');
+
+    const both = authWith([
+      role(['movement.create', 'movement.read'], north),
+      role(['movement.receive'], south),
+    ]);
+    await service.create(both, transferOf({ receiveNow: true }));
+
+    // Enabled in South, where the stock arrives.
+    expect(tenant.productWarehouse.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { productId: 5, warehouseId: 2 } }),
+    );
+    expect(balanceInserts(tenant)[0].slice(1)).toEqual([11, 20, null, '4']);
+    const data = tenant.movement.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({ status: 'CONFIRMED', receivedById: 1 });
+    expect(data.lines.create[0].receivedQuantity).toEqual(D(4));
+    expect(evaluateAlerts).toHaveBeenLastCalledWith(tenant, [9, 11]);
+  });
+});
+
+function inTransit(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'IN_TRANSIT',
+    movementType: { nature: 'TRANSFER' },
+    lines: [
+      {
+        lineNumber: 1,
+        productId: 5,
+        lotId: null,
+        quantity: D(4),
+        destinationLocationId: 20,
+        originLocation: { warehouseId: 1 },
+        destinationLocation: { warehouseId: 2 },
+      },
+    ],
+    ...overrides,
+  };
+}
+
+const receiver = authWith([role(['movement.read', 'movement.receive'], south)]);
+
+describe('MovementsService.receive', () => {
+  it('hides transfers you cannot read and checks the receive permission', async () => {
+    const { tenant, service } = transferSetup();
+    tenant.movement.findUnique.mockResolvedValue(inTransit());
+    const elsewhere = authWith([
+      role(['movement.receive'], { id: 3, name: 'East' }),
+    ]);
+    expect(await errorCode(service.receive(elsewhere, 1, {}))).toBe(
+      'MOVEMENT_NOT_FOUND',
+    );
+    // The origin can see it but not receive it.
+    expect(await errorCode(service.receive(clerk, 1, {}))).toBe('FORBIDDEN');
+  });
+
+  it('only receives transfers in transit, and not more than was sent', async () => {
+    const { tenant, service } = transferSetup();
+    tenant.movement.findUnique.mockResolvedValue(
+      inTransit({ status: 'CONFIRMED' }),
+    );
+    expect(await errorCode(service.receive(receiver, 1, {}))).toBe(
+      'MOVEMENT_NOT_IN_TRANSIT',
+    );
+
+    tenant.movement.findUnique.mockResolvedValue(inTransit());
+    expect(
+      await errorCode(
+        service.receive(receiver, 1, {
+          lines: [{ lineNumber: 1, receivedQuantity: 5 }],
+        }),
+      ),
+    ).toBe('RECEIVED_QUANTITY_INVALID');
+    expect(
+      await errorCode(
+        service.receive(receiver, 1, {
+          lines: [{ lineNumber: 2, receivedQuantity: 1 }],
+        }),
+      ),
+    ).toBe('RECEIPT_LINE_INVALID');
+
+    // Someone else received it first.
+    tenant.movement.updateMany.mockResolvedValue({ count: 0 });
+    expect(await errorCode(service.receive(receiver, 1, {}))).toBe(
+      'MOVEMENT_NOT_IN_TRANSIT',
+    );
+    expect(balanceInserts(tenant)).toHaveLength(0);
+  });
+
+  it('adds what arrived to the destination and records it on the line', async () => {
+    const { tenant, service } = transferSetup();
+    tenant.movement.findUnique.mockResolvedValue(inTransit());
+
+    await service.receive(receiver, 1, {
+      lines: [{ lineNumber: 1, receivedQuantity: 3 }],
+    });
+
+    expect(tenant.movement.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, status: 'IN_TRANSIT' },
+      data: expect.objectContaining({ status: 'CONFIRMED', receivedById: 1 }),
+    });
+    expect(balanceInserts(tenant)[0].slice(1)).toEqual([11, 20, null, '3']);
+    expect(tenant.movementLine.update).toHaveBeenCalledWith({
+      where: { movementId_lineNumber: { movementId: 1, lineNumber: 1 } },
+      data: { receivedQuantity: D(3), destinationLocationId: 20 },
+    });
+    expect(evaluateAlerts).toHaveBeenLastCalledWith(tenant, [11]);
   });
 });
