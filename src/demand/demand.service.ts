@@ -76,9 +76,9 @@ export function periodStarts(
 }
 
 // CU-10 A1 / US-37 (RF-PRED-001): demand history of a product, per period. Demand
-// is the CONFIRMED outbound movements whose type counts as demand (sales and
-// internal consumption); movements of the stock request type count only when they
-// fulfil a request (RN-008). Periods without demand are 0, never a gap.
+// is the CONFIRMED outbound movements whose type counts as demand: sales and
+// internal consumption, with or without a stock request (US-013). Periods without
+// demand are 0, never a gap.
 @Injectable()
 export class DemandService {
   constructor(private readonly tenants: TenantPrismaService) {}
@@ -160,19 +160,14 @@ export class DemandService {
       JOIN "${schema}"."movement_types" t ON t."id" = m."movement_type_id"
       JOIN "${schema}"."locations" loc ON loc."id" = l."origin_location_id"
      WHERE l."product_id" = $1
-       AND ${demandCondition('$2')}
-       AND ($3::int[] IS NULL OR loc."warehouse_id" = ANY($3::int[]))`;
-    const params = [
-      productId,
-      settings?.stockRequestMovementTypeId ?? null,
-      warehouseIds,
-      timeZone,
-    ];
+       AND ${demandCondition()}
+       AND ($2::int[] IS NULL OR loc."warehouse_id" = ANY($2::int[]))`;
+    const params = [productId, warehouseIds, timeZone];
 
     const [{ first }] = await tenant.$queryRawUnsafe<
       { first: string | null }[]
     >(
-      `SELECT to_char(MIN((m."occurred_at" AT TIME ZONE $4)::date), 'YYYY-MM-DD') AS "first"
+      `SELECT to_char(MIN((m."occurred_at" AT TIME ZONE $3)::date), 'YYYY-MM-DD') AS "first"
        ${demand}`,
       ...params,
     );
@@ -191,11 +186,11 @@ export class DemandService {
     const rows = await tenant.$queryRawUnsafe<
       { period: string; quantity: string }[]
     >(
-      `SELECT to_char(date_trunc($5, m."occurred_at" AT TIME ZONE $4), 'YYYY-MM-DD') AS "period",
+      `SELECT to_char(date_trunc($4, m."occurred_at" AT TIME ZONE $3), 'YYYY-MM-DD') AS "period",
               SUM(l."quantity")::text AS "quantity"
        ${demand}
-         AND (m."occurred_at" AT TIME ZONE $4)::date >= $6::date
-         AND (m."occurred_at" AT TIME ZONE $4)::date < $7::date
+         AND (m."occurred_at" AT TIME ZONE $3)::date >= $5::date
+         AND (m."occurred_at" AT TIME ZONE $3)::date < $6::date
        GROUP BY 1`,
       ...params,
       granularity === GranularityValue.MONTHLY ? 'month' : 'week',
