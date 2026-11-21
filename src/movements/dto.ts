@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsISO8601,
@@ -26,6 +27,14 @@ export enum MovementNatureFilter {
   OUTBOUND = 'OUTBOUND',
   TRANSFER = 'TRANSFER',
   ADJUSTMENT = 'ADJUSTMENT',
+}
+
+/** Movement statuses, as stored in `movements.status`. */
+export enum MovementStatusFilter {
+  DRAFT = 'DRAFT',
+  IN_TRANSIT = 'IN_TRANSIT',
+  CONFIRMED = 'CONFIRMED',
+  VOIDED = 'VOIDED',
 }
 
 /** Whether an adjustment line adds stock or removes it. */
@@ -70,13 +79,26 @@ export class MovementLineInputDto {
   @ApiPropertyOptional({
     example: 7,
     description:
-      "Active location of the movement's warehouse. Omitted = the product's default " +
-      "location in the warehouse, or else the warehouse's default location",
+      "Active location of the movement's warehouse (on transfers, where the stock leaves " +
+      "from). Omitted = the product's default location in the warehouse, or else the " +
+      "warehouse's default location",
   })
   @IsOptional()
   @IsInt()
   @Min(1)
   locationId?: number;
+
+  @ApiPropertyOptional({
+    example: 12,
+    description:
+      'Transfers only: active location of the destination warehouse where the stock ' +
+      "arrives. Omitted = the product's default location there, or else the destination's " +
+      'default location. The receiver can still change it',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  destinationLocationId?: number;
 
   @ApiPropertyOptional({
     example: 'L-2026-11',
@@ -119,7 +141,8 @@ export class CreateMovementDto {
   @ApiProperty({
     example: 2,
     description:
-      'Movement type (`GET /movement-types`). `TRANSFER` types are not supported yet',
+      'Movement type (`GET /movement-types`). `TRANSFER` types also need ' +
+      '`destinationWarehouseId`',
   })
   @IsInt()
   @Min(1)
@@ -127,15 +150,40 @@ export class CreateMovementDto {
 
   @ApiProperty({
     example: 1,
-    description: 'Active warehouse where you hold `movement.create`',
+    description:
+      'Active warehouse where you hold `movement.create`. On transfers, the origin',
   })
   @IsInt()
   @Min(1)
   warehouseId: number;
 
   @ApiPropertyOptional({
+    example: 2,
+    description:
+      'Transfers only (required there): active warehouse the stock goes to, other than ' +
+      '`warehouseId`',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  destinationWarehouseId?: number;
+
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      'Transfers only. `false`: the stock leaves the origin and stays in transit until the ' +
+      'destination receives it (`POST /movements/:id/receive`). `true`: it arrives at once ' +
+      'and the movement is confirmed; needs `movement.receive` in the destination too',
+  })
+  @IsOptional()
+  @IsBoolean()
+  receiveNow?: boolean;
+
+  @ApiPropertyOptional({
     example: 4,
-    description: 'Active department that receives or consumes the stock',
+    description:
+      'Active department that receives or consumes the stock. Not on transfers',
   })
   @IsOptional()
   @IsInt()
@@ -183,6 +231,26 @@ export class ListMovementsQueryDto {
   @IsInt()
   @Min(1)
   warehouseId?: number;
+
+  @ApiPropertyOptional({
+    example: 2,
+    description:
+      'Only movements whose stock goes to this warehouse (inbound, increases and ' +
+      'transfers). With `status=IN_TRANSIT`, the transfers it has to receive',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  destinationWarehouseId?: number;
+
+  @ApiPropertyOptional({
+    enum: MovementStatusFilter,
+    enumName: 'MovementStatus',
+  })
+  @IsOptional()
+  @IsEnum(MovementStatusFilter)
+  status?: MovementStatusFilter;
 
   @ApiPropertyOptional({
     example: 1,
@@ -239,4 +307,50 @@ export class ListMovementsQueryDto {
   @Min(1)
   @Max(100)
   pageSize?: number;
+}
+
+export class ReceiveLineInputDto {
+  @ApiProperty({ example: 1, description: 'Line of the transfer' })
+  @IsInt()
+  @Min(1)
+  lineNumber: number;
+
+  @ApiProperty({
+    example: 10,
+    minimum: 0,
+    description:
+      'What arrived, from 0 up to the quantity sent. Less than sent is recorded as lost ' +
+      'in transit: it does not return to the origin',
+  })
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0)
+  @Max(MAX_QUANTITY)
+  receivedQuantity: number;
+
+  @ApiPropertyOptional({
+    example: 12,
+    description:
+      'Active location of the destination warehouse where it is stored. Omitted = the ' +
+      'one chosen when it was dispatched',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  locationId?: number;
+}
+
+export class ReceiveTransferDto {
+  @ApiPropertyOptional({
+    type: [ReceiveLineInputDto],
+    maxItems: MAX_MOVEMENT_LINES,
+    description:
+      'Only the lines that differ from what was sent; the others are received in full. ' +
+      'Omitted = everything arrived',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_MOVEMENT_LINES)
+  @ValidateNested({ each: true })
+  @Type(() => ReceiveLineInputDto)
+  lines?: ReceiveLineInputDto[];
 }

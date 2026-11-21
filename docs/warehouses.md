@@ -19,7 +19,7 @@ A warehouse is a storage warehouse (`WAREHOUSE`, bodega) or a point of sale (`ST
 
 - Code (`409 WAREHOUSE_CODE_TAKEN`) and name (`409 WAREHOUSE_NAME_TAKEN`) are unique in the organization, ignoring case.
 - `holdsStock` (default `true`) is `false` for a warehouse that never holds stock: its demand must not drive replenishment, so the forecasting service declines its products (`NO_FORECAST`, `non_stock_warehouse`, [`forecasting.md`](forecasting.md)).
-- Warehouses are never deleted. Closing one (`isActive: false`) requires no stock on hand (`409 WAREHOUSE_HAS_STOCK`) and resolves the open alerts of its products there; reopening evaluates them again ([`replenishment.md`](replenishment.md)). Inactive warehouses cannot be used in new invitations or role assignments.
+- Warehouses are never deleted. Closing one (`isActive: false`) requires no stock on hand (`409 WAREHOUSE_HAS_STOCK`) and no transfers in transit to or from it (`409 WAREHOUSE_HAS_TRANSFERS_IN_TRANSIT`; [`movements.md`](movements.md)), and resolves the open alerts of its products there; reopening evaluates them again ([`replenishment.md`](replenishment.md)). Inactive warehouses cannot be used in new invitations or role assignments.
 
 ## Not done yet
 

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   HttpStatus,
   Param,
   ParseIntPipe,
@@ -22,6 +23,7 @@ import {
   CreateMovementDto,
   ListMovementsQueryDto,
   ListMovementTypesQueryDto,
+  ReceiveTransferDto,
 } from './dto.js';
 import { MovementsService } from './movements.service.js';
 import { MovementDto, MovementPageDto, MovementTypeDto } from './responses.js';
@@ -91,7 +93,11 @@ export class MovementsController {
       'Inbound, outbound or adjustment movement, confirmed at once: stock changes in the ' +
       'same transaction and the movement cannot be edited or deleted afterwards. Stock ' +
       'never goes negative unless the organization allows it. Requires `movement.create` ' +
-      'in the warehouse and a role there that allows the movement type.',
+      'in the warehouse and a role there that allows the movement type. A transfer ' +
+      '(`TRANSFER` type, with `destinationWarehouseId`) takes the stock out of ' +
+      '`warehouseId` and leaves it `IN_TRANSIT` until the destination receives it, or ' +
+      'with `receiveNow` adds it to the destination at once (`CONFIRMED`; also needs ' +
+      '`movement.receive` there).',
   })
   @ApiCreatedResponse({ type: MovementDto })
   @ApiSession({
@@ -101,8 +107,12 @@ export class MovementsController {
       [HttpStatus.BAD_REQUEST]: [
         'WAREHOUSE_INVALID',
         'MOVEMENT_TYPE_INVALID',
-        'MOVEMENT_TYPE_NOT_SUPPORTED',
+        'DESTINATION_WAREHOUSE_REQUIRED',
+        'DESTINATION_WAREHOUSE_INVALID',
+        'SAME_WAREHOUSE',
+        'TRANSFER_FIELDS_NOT_ALLOWED',
         'DEPARTMENT_INVALID',
+        'DEPARTMENT_NOT_ALLOWED',
         'PRODUCT_INVALID',
         'LOCATION_INVALID',
         'LOT_REQUIRED',
@@ -116,5 +126,42 @@ export class MovementsController {
   })
   create(@CurrentAuth() auth: AuthContext, @Body() dto: CreateMovementDto) {
     return this.movements.create(auth, dto);
+  }
+
+  @Post('movements/:id/receive')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('movement.receive')
+  @ApiOperation({
+    summary: 'Receive a transfer',
+    description:
+      'The destination receives a transfer `IN_TRANSIT`: what arrived is added to its ' +
+      'stock and the transfer becomes `CONFIRMED`. Without `lines`, everything arrived. ' +
+      'A line received short records the difference as lost in transit; it does not ' +
+      'return to the origin. Find the pending ones with ' +
+      '`GET /movements?status=IN_TRANSIT&destinationWarehouseId=`. Requires ' +
+      '`movement.receive` in the destination warehouse.',
+  })
+  @ApiParam({ name: 'id', type: Number, example: 1 })
+  @ApiOkResponse({ type: MovementDto })
+  @ApiSession({
+    permissions: ['movement.receive'],
+    validation: true,
+    errors: {
+      [HttpStatus.BAD_REQUEST]: [
+        'DESTINATION_WAREHOUSE_INVALID',
+        'RECEIPT_LINE_INVALID',
+        'RECEIVED_QUANTITY_INVALID',
+        'LOCATION_INVALID',
+      ],
+      [HttpStatus.NOT_FOUND]: ['MOVEMENT_NOT_FOUND'],
+      [HttpStatus.CONFLICT]: ['MOVEMENT_NOT_IN_TRANSIT'],
+    },
+  })
+  receive(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReceiveTransferDto,
+  ) {
+    return this.movements.receive(auth, id, dto);
   }
 }
