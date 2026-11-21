@@ -158,8 +158,9 @@ export class AuthController {
       'that does not belong to it are rejected with `NOT_A_MEMBER`), then emails a six-digit code and answers ' +
       '`202` with `LoginCodeRequiredResponse`; `POST /auth/login/verify` completes it. The pending login is kept ' +
       'in the HttpOnly cookie `pango_login_<subdomain>` (path `/auth/login`). Logging in again within a minute ' +
-      'keeps the code already sent instead of emailing another. With `LOGIN_EMAIL_CODE_ENABLED=false` it answers ' +
-      `\`200\` with the session at once. ${COOKIE_NOTE}`,
+      'keeps the code already sent instead of emailing another. A browser trusted after an earlier code ' +
+      '(cookie `pango_device_<subdomain>`, see POST /auth/login/verify) and `LOGIN_EMAIL_CODE_ENABLED=false` ' +
+      `answer \`200\` with the session at once. ${COOKIE_NOTE}`,
   })
   @ApiExtraModels(SessionResponseDto, LoginCodeRequiredResponseDto)
   @ApiAcceptedResponse({
@@ -167,7 +168,7 @@ export class AuthController {
     type: LoginCodeRequiredResponseDto,
   })
   @ApiOkResponse({
-    description: 'Session, only when the emailed code is disabled',
+    description: 'Session: a trusted browser, or the emailed code disabled',
     type: SessionResponseDto,
   })
   @ApiPublic({
@@ -186,7 +187,10 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ) {
     const subdomain = this.tenantResolver.resolve(request);
-    const result = await this.auth.login(subdomain, dto);
+    const device = subdomain
+      ? this.cookies.readTrustedDevice(request, subdomain)
+      : null;
+    const result = await this.auth.login(subdomain, dto, device);
     if ('accessToken' in result) return this.cookies.issue(response, result);
     this.cookies.issueLoginChallenge(
       response,
@@ -207,7 +211,10 @@ export class AuthController {
       'Reads the pending login from the `pango_login_<subdomain>` cookie and, with the right code, opens the ' +
       'session and clears that cookie. `LOGIN_CODE_INVALID` carries `attemptsLeft`; after the last attempt (`LOGIN_CODE_ATTEMPTS_EXCEEDED`) or with ' +
       'no pending login (`LOGIN_CHALLENGE_INVALID`) the cookie is cleared and the user must log in again. ' +
-      `An expired code (\`LOGIN_CODE_EXPIRED\`) can be replaced with POST /auth/login/resend. ${COOKIE_NOTE}`,
+      'An expired code (`LOGIN_CODE_EXPIRED`) can be replaced with POST /auth/login/resend. The right code also ' +
+      'trusts the browser: the HttpOnly cookie `pango_device_<subdomain>` (path `/auth/login`) skips the code on ' +
+      'the next logins for `LOGIN_TRUSTED_DEVICE_HOURS` (default 12), or `LOGIN_REMEMBER_DEVICE_DAYS` (default 30) ' +
+      `with \`rememberDevice\`. Logging out keeps it; changing the password ends it. ${COOKIE_NOTE}`,
   })
   @ApiOkResponse({ type: SessionResponseDto })
   @ApiPublic({
@@ -234,12 +241,21 @@ export class AuthController {
       ? this.cookies.readLoginChallenge(request, subdomain)
       : null;
     try {
-      const session = await this.auth.verifyLoginCode(
+      const { session, trust } = await this.auth.verifyLoginCode(
         subdomain,
         token,
         dto.code,
+        dto.rememberDevice ?? false,
       );
       this.cookies.clearLoginChallenge(response, subdomain!);
+      if (trust) {
+        this.cookies.issueTrustedDevice(
+          response,
+          subdomain!,
+          trust.token,
+          trust.maxAgeMs,
+        );
+      }
       return this.cookies.issue(response, session);
     } catch (error) {
       if (subdomain && endsLogin(error)) {
