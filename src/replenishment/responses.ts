@@ -11,6 +11,13 @@ export class OpenAlertRefDto {
   @ApiProperty({ example: 3 })
   id: number;
 
+  @ApiProperty({
+    enum: ['OPEN', 'ATTENDED'],
+    enumName: 'AlertStatus',
+    description: 'Pending, or attended and still in force',
+  })
+  status: 'OPEN' | 'ATTENDED';
+
   @ApiProperty({ example: 2, description: '1 = lowest, 3 = nothing available' })
   severity: number;
 
@@ -72,6 +79,14 @@ export class ReplenishmentDto {
   openAlert: OpenAlertRefDto | null;
 }
 
+export class AlertAttendantDto {
+  @ApiProperty({ example: 4, description: 'Tenant user id' })
+  id: number;
+
+  @ApiProperty({ example: 'Ana Gómez' })
+  name: string;
+}
+
 export class AlertDto {
   @ApiProperty({ example: 3 })
   id: number;
@@ -91,10 +106,13 @@ export class AlertDto {
   severity: number;
 
   @ApiProperty({
-    enum: ['OPEN', 'RESOLVED', 'DISMISSED'],
+    enum: ['OPEN', 'ATTENDED', 'RESOLVED', 'DISMISSED'],
     enumName: 'AlertStatus',
+    description:
+      '`OPEN` pending; `ATTENDED` someone took charge, still in force until ' +
+      'resolved; `RESOLVED` closed by the evaluation',
   })
-  status: 'OPEN' | 'RESOLVED' | 'DISMISSED';
+  status: 'OPEN' | 'ATTENDED' | 'RESOLVED' | 'DISMISSED';
 
   @ApiProperty({ type: MovementProductDto })
   product: MovementProductDto;
@@ -173,6 +191,21 @@ export class AlertDto {
     | 'NO_REORDER_POINT'
     | 'INACTIVE'
     | null;
+
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description:
+      'When it was marked attended; null while pending. Kept once resolved',
+  })
+  attendedAt: Date | null;
+
+  @ApiProperty({
+    type: AlertAttendantDto,
+    nullable: true,
+    description: 'Who marked it attended',
+  })
+  attendedBy: AlertAttendantDto | null;
 }
 
 export class AlertPageDto {

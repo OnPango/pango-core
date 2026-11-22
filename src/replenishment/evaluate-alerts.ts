@@ -1,5 +1,6 @@
 import {
   type AlertResolution,
+  type AlertStatus,
   Prisma,
 } from '../generated/prisma/tenant/client.js';
 
@@ -97,6 +98,16 @@ export async function stockLevels(
   return levels;
 }
 
+/** Alerts still in force: pending, or attended but not resolved yet (US-045). */
+export const IN_FORCE: AlertStatus[] = ['OPEN', 'ATTENDED'];
+
+/** What marking an alert pending again clears. */
+export const BACK_TO_PENDING = {
+  status: 'OPEN',
+  attendedAt: null,
+  attendedById: null,
+} as const;
+
 /**
  * CU-12a: compares available stock with the reorder point of each
  * product-warehouse. Opens a `BELOW_ROP` alert when available ≤ reorder point and
@@ -141,11 +152,12 @@ export async function evaluateAlerts(
     where: {
       productWarehouseId: { in: productWarehouseIds },
       type: 'BELOW_ROP',
-      status: 'OPEN',
+      status: { in: IN_FORCE },
     },
     select: {
       id: true,
       productWarehouseId: true,
+      status: true,
       severity: true,
       suggestedQuantity: true,
       availableQuantity: true,
@@ -191,11 +203,18 @@ export async function evaluateAlerts(
           },
         });
       } else if (!sameValues(current, values)) {
-        // Still below with an alert open: never a second one (RF-ALT-001), but
-        // keep what it shows current. `createdAt` stays when it was raised.
+        // Still below with an alert in force: never a second one (RF-ALT-001),
+        // but keep what it shows current. `createdAt` stays when it was raised.
+        // An attended alert that gets worse needs someone to look again.
+        const worse =
+          current.status === 'ATTENDED' && values.severity > current.severity;
         await tx.alert.update({
           where: { id: current.id },
-          data: { ...values, updatedAt: now },
+          data: {
+            ...values,
+            ...(worse && BACK_TO_PENDING),
+            updatedAt: now,
+          },
         });
       }
     } else if (current !== undefined) {
@@ -205,7 +224,7 @@ export async function evaluateAlerts(
   }
   for (const [resolution, ids] of toResolve) {
     await tx.alert.updateMany({
-      where: { id: { in: ids }, status: 'OPEN' },
+      where: { id: { in: ids }, status: { in: IN_FORCE } },
       data: { status: 'RESOLVED', resolution, resolvedAt: now, updatedAt: now },
     });
   }

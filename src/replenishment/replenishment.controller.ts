@@ -4,6 +4,7 @@ import {
   Get,
   HttpStatus,
   Param,
+  Patch,
   ParseIntPipe,
   Put,
   Query,
@@ -17,7 +18,11 @@ import {
 import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentAuth, RequirePermissions } from '../auth/decorators.js';
 import { ApiSession, requiresPermissions } from '../swagger/api-docs.js';
-import { ListAlertsQueryDto, SetReplenishmentDto } from './dto.js';
+import {
+  ListAlertsQueryDto,
+  SetAlertStatusDto,
+  SetReplenishmentDto,
+} from './dto.js';
 import { ReplenishmentService } from './replenishment.service.js';
 import { AlertDto, AlertPageDto, ReplenishmentDto } from './responses.js';
 
@@ -129,5 +134,34 @@ export class AlertsController {
   })
   get(@CurrentAuth() auth: AuthContext, @Param('id', ParseIntPipe) id: number) {
     return this.replenishment.getAlert(auth, id);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('alert.resolve')
+  @ApiOperation({
+    summary: 'Mark a stock alert attended or pending',
+    description:
+      'US-045: `ATTENDED` records who took charge and when; `OPEN` puts it back ' +
+      'to pending. Either way it stays in force: movements keep refreshing it, it ' +
+      'resolves on its own when stock recovers, and an attended alert whose ' +
+      'severity rises goes back to `OPEN`. Needs `alert.resolve` in its warehouse; ' +
+      `a resolved alert answers \`409 ALERT_CLOSED\`. ${requiresPermissions('alert.resolve')}`,
+  })
+  @ApiParam({ name: 'id', type: Number, example: 1 })
+  @ApiOkResponse({ type: AlertDto })
+  @ApiSession({
+    permissions: ['alert.resolve'],
+    validation: true,
+    errors: {
+      [HttpStatus.NOT_FOUND]: ['ALERT_NOT_FOUND'],
+      [HttpStatus.CONFLICT]: ['ALERT_CLOSED'],
+    },
+  })
+  setStatus(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetAlertStatusDto,
+  ) {
+    return this.replenishment.setAlertStatus(auth, id, dto);
   }
 }

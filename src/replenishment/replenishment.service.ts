@@ -6,14 +6,22 @@ import {
 } from '../auth/auth-context.js';
 import { authErrors } from '../auth/auth-errors.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
+import { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
 import {
+  AlertManualStatus,
   AlertSort,
   type ListAlertsQueryDto,
+  type SetAlertStatusDto,
   type SetReplenishmentDto,
 } from './dto.js';
-import { evaluateAlerts, stockLevels } from './evaluate-alerts.js';
+import {
+  BACK_TO_PENDING,
+  evaluateAlerts,
+  IN_FORCE,
+  stockLevels,
+} from './evaluate-alerts.js';
 import { replenishmentErrors } from './replenishment-errors.js';
 import type { AlertDto, AlertPageDto, ReplenishmentDto } from './responses.js';
 
@@ -52,7 +60,10 @@ const alertOrder: Record<AlertSort, Prisma.AlertOrderByWithRelationInput[]> = {
   ],
 };
 
-function toAlertDto(alert: AlertWithRefs): AlertDto {
+/** Names of the users who attended alerts, by tenant user id. */
+type Attendants = Map<number, string>;
+
+function toAlertDto(alert: AlertWithRefs, attendants: Attendants): AlertDto {
   const { product, warehouse } = alert.productWarehouse;
   return {
     id: alert.id,
@@ -75,6 +86,14 @@ function toAlertDto(alert: AlertWithRefs): AlertDto {
     updatedAt: alert.updatedAt,
     resolvedAt: alert.resolvedAt,
     resolution: alert.resolution,
+    attendedAt: alert.attendedAt,
+    attendedBy:
+      alert.attendedById === null
+        ? null
+        : {
+            id: alert.attendedById,
+            name: attendants.get(alert.attendedById) ?? '',
+          },
   };
 }
 
@@ -98,7 +117,10 @@ export function replenishmentProblem(dto: SetReplenishmentDto): string | null {
 // and every change of the parameters (CU-12a).
 @Injectable()
 export class ReplenishmentService {
-  constructor(private readonly tenants: TenantPrismaService) {}
+  constructor(
+    private readonly tenants: TenantPrismaService,
+    private readonly control: ControlPrismaService,
+  ) {}
 
   async get(
     auth: AuthContext,
@@ -188,7 +210,13 @@ export class ReplenishmentService {
         take: pageSize,
       }),
     ]);
-    return { items: alerts.map(toAlertDto), total, page, pageSize };
+    const attendants = await this.attendants(auth, alerts);
+    return {
+      items: alerts.map((alert) => toAlertDto(alert, attendants)),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async getAlert(auth: AuthContext, id: number): Promise<AlertDto> {
@@ -205,11 +233,97 @@ export class ReplenishmentService {
     ) {
       throw replenishmentErrors.alertNotFound();
     }
-    return toAlertDto(alert);
+    return toAlertDto(alert, await this.attendants(auth, [alert]));
+  }
+
+  /**
+   * US-045: marks an alert in force as attended (someone took charge) or as
+   * pending again. Needs `alert.resolve` in the alert's warehouse; a resolved
+   * alert cannot change. Setting the status it already has changes nothing, so
+   * who attended it first is kept.
+   */
+  async setAlertStatus(
+    auth: AuthContext,
+    id: number,
+    dto: SetAlertStatusDto,
+  ): Promise<AlertDto> {
+    const tenant = this.tenant(auth);
+    const alert = await tenant.alert.findUnique({
+      where: { id },
+      select: {
+        status: true,
+        productWarehouse: { select: { productId: true, warehouseId: true } },
+      },
+    });
+    const permissions = alert
+      ? permissionsInWarehouse(
+          auth.user.roles,
+          alert.productWarehouse.warehouseId,
+        )
+      : null;
+    if (!alert || !permissions?.has('alert.read')) {
+      throw replenishmentErrors.alertNotFound();
+    }
+    if (!permissions.has('alert.resolve')) throw authErrors.forbidden();
+    if (!IN_FORCE.includes(alert.status)) {
+      throw replenishmentErrors.alertClosed();
+    }
+
+    if (alert.status !== dto.status) {
+      const schema = assertTenantSchema(auth.organization.schemaName);
+      const now = new Date();
+      await tenant.$transaction(async (tx) => {
+        // Same lock as movements: an evaluation of this product never runs
+        // between the check and the change.
+        await tx.$queryRawUnsafe(
+          `SELECT "id" FROM "${schema}"."products" WHERE "id" = $1 FOR UPDATE`,
+          alert.productWarehouse.productId,
+        );
+        const { count } = await tx.alert.updateMany({
+          where: { id, status: { in: IN_FORCE } },
+          data:
+            dto.status === AlertManualStatus.ATTENDED
+              ? {
+                  status: 'ATTENDED',
+                  attendedAt: now,
+                  attendedById: auth.user.id,
+                  updatedAt: now,
+                }
+              : { ...BACK_TO_PENDING, updatedAt: now },
+        });
+        if (count === 0) throw replenishmentErrors.alertClosed();
+      });
+    }
+    return this.getAlert(auth, id);
   }
 
   private tenant(auth: AuthContext) {
     return this.tenants.client(auth.organization.schemaName);
+  }
+
+  /** The account names of whoever attended these alerts (control schema). */
+  private async attendants(
+    auth: AuthContext,
+    alerts: { attendedById: number | null }[],
+  ): Promise<Attendants> {
+    const ids = [
+      ...new Set(
+        alerts.flatMap((a) =>
+          a.attendedById === null ? [] : [a.attendedById],
+        ),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+    const users = await this.tenant(auth).user.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, accountId: true },
+    });
+    const accounts = await this.control.account.findMany({
+      where: { id: { in: users.map((u) => u.accountId) } },
+      select: { id: true, name: true },
+    });
+    const names = new Map(accounts.map((a) => [a.id, a.name]));
+    return new Map(users.map((u) => [u.id, names.get(u.accountId) ?? '']));
   }
 
   private async assertUsable(
@@ -247,9 +361,10 @@ export class ReplenishmentService {
         where: { productId_warehouseId: { productId, warehouseId } },
         include: {
           alerts: {
-            where: { type: 'BELOW_ROP', status: 'OPEN' },
+            where: { type: 'BELOW_ROP', status: { in: IN_FORCE } },
             select: {
               id: true,
+              status: true,
               severity: true,
               createdAt: true,
               updatedAt: true,
@@ -264,6 +379,7 @@ export class ReplenishmentService {
     const level = pw
       ? (await stockLevels(tenant, [pw])).get(pw.id)!
       : undefined;
+    const inForce = pw?.alerts[0];
     return {
       product: {
         id: product.id,
@@ -280,7 +396,12 @@ export class ReplenishmentService {
       minStock: pw?.minStock?.toNumber() ?? null,
       maxStock: pw?.maxStock?.toNumber() ?? null,
       valueSource: pw?.valueSource ?? 'MANUAL',
-      openAlert: pw?.alerts[0] ?? null,
+      openAlert: inForce
+        ? {
+            ...inForce,
+            status: inForce.status === 'ATTENDED' ? 'ATTENDED' : 'OPEN',
+          }
+        : null,
     };
   }
 }

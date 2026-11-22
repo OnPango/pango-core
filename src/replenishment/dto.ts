@@ -15,8 +15,25 @@ const MAX_QUANTITY = 9_999_999_999;
 /** Alert statuses, as stored in `alerts.status`. */
 export enum AlertStatusFilter {
   OPEN = 'OPEN',
+  ATTENDED = 'ATTENDED',
   RESOLVED = 'RESOLVED',
   DISMISSED = 'DISMISSED',
+}
+
+/** What a person can set by hand (US-045): pending again, or attended. */
+export enum AlertManualStatus {
+  OPEN = 'OPEN',
+  ATTENDED = 'ATTENDED',
+}
+
+export class SetAlertStatusDto {
+  @ApiProperty({
+    enum: AlertManualStatus,
+    enumName: 'AlertManualStatus',
+    example: AlertManualStatus.ATTENDED,
+  })
+  @IsEnum(AlertManualStatus)
+  status: AlertManualStatus;
 }
 
 /** Order of `GET /alerts`. */

@@ -147,6 +147,9 @@ enum AlertType {
 
 enum AlertStatus {
   OPEN
+  /// Someone took charge (US-045). Still in force: refreshed, never duplicated,
+  /// resolved by the evaluation; back to OPEN by hand or when its severity rises.
+  ATTENDED
   RESOLVED
   DISMISSED
 
@@ -245,6 +248,7 @@ model User {
   stockRequestEvents  StockRequestEvent[]
   forecastRuns        ForecastRun[]
   notifications       Notification[]
+  attendedAlerts      Alert[]             @relation("AlertAttendedBy")
 
   @@index([departmentId])
   @@map("users")
@@ -924,9 +928,13 @@ model Alert {
   resolvedAt         DateTime?        @map("resolved_at") @db.Timestamptz
   /// Why it was resolved; null while open, and for alerts resolved before reasons were recorded.
   resolution         AlertResolution?
+  /// Who marked it attended and when; null while pending (US-045).
+  attendedAt         DateTime?        @map("attended_at") @db.Timestamptz
+  attendedById       Int?             @map("attended_by_id")
 
   productWarehouse ProductWarehouse @relation(fields: [productWarehouseId], references: [id], onDelete: Restrict)
   draftMovement    Movement?        @relation(fields: [draftMovementId], references: [id], onDelete: SetNull)
+  attendedBy       User?            @relation("AlertAttendedBy", fields: [attendedById], references: [id], onDelete: SetNull)
   notifications    Notification[]
 
   @@index([productWarehouseId, status])
