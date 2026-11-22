@@ -148,9 +148,8 @@ describe('DemandService.series', () => {
     });
     // Product, stock request type, warehouses, time zone, period, range.
     expect(tenant.$queryRawUnsafe).toHaveBeenLastCalledWith(
-      expect.stringContaining('date_trunc($5'),
+      expect.stringContaining('date_trunc($4'),
       5,
-      3,
       [1],
       'America/Bogota',
       'week',
@@ -159,18 +158,13 @@ describe('DemandService.series', () => {
     );
   });
 
-  it('counts stock request types only when they fulfil a request', async () => {
+  it('counts internal consumption with or without a stock request (US-013)', async () => {
     const { tenant, service } = setup(null);
     await service.series(reader, 5, {});
-    expect(tenant.$queryRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining(
-        '(m."stock_request_id" IS NOT NULL OR t."id" IS DISTINCT FROM $2::int)',
-      ),
-      5,
-      3,
-      [1],
-      'America/Bogota',
-    );
+    const [sql, ...params] = tenant.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('t."counts_as_demand"');
+    expect(sql).not.toContain('stock_request_id');
+    expect(params).toEqual([5, [1], 'America/Bogota']);
   });
 
   it('answers an empty series with a notice for a product without demand', async () => {
@@ -187,7 +181,7 @@ describe('DemandService.series', () => {
     const owner = authWith(['forecast.read'], null);
     const { tenant, service } = setup(null);
     await service.series(owner, 5, {});
-    expect(tenant.$queryRawUnsafe.mock.calls[0][3]).toBeNull();
+    expect(tenant.$queryRawUnsafe.mock.calls[0][2]).toBeNull();
 
     expect(await errorCode(service.series(reader, 5, { warehouseId: 2 }))).toBe(
       'WAREHOUSE_NOT_FOUND',

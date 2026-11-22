@@ -28,7 +28,6 @@ export async function buildSeries(
     productWarehouses: SeriesKey[];
     historyEnd: string;
     timeZone: string;
-    stockRequestTypeId: number | null;
   },
 ): Promise<ForecastSeriesInput[]> {
   const ids = input.productWarehouses.map((pw) => pw.id);
@@ -49,14 +48,13 @@ export async function buildSeries(
        JOIN "${schema}"."product_warehouses" pw
          ON pw."product_id" = l."product_id" AND pw."warehouse_id" = loc."warehouse_id"
       WHERE pw."id" = ANY($1::int[])
-        AND ${demandCondition('$4')}
+        AND ${demandCondition()}
         AND (m."occurred_at" AT TIME ZONE $2)::date <= $3::date
       GROUP BY 1, 2
       ORDER BY 1, 2`,
     ids,
     input.timeZone,
     input.historyEnd,
-    input.stockRequestTypeId,
   );
 
   // Net change per day (outbound lines subtract at the origin, inbound lines add

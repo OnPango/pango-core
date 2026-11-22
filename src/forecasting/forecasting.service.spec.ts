@@ -140,7 +140,6 @@ describe('buildSeries', () => {
       ],
       historyEnd: '2026-11-15',
       timeZone: 'America/Bogota',
-      stockRequestTypeId: 3,
     });
     expect(series).toEqual([
       {
@@ -156,13 +155,12 @@ describe('buildSeries', () => {
         ],
       },
     ]);
-    // Demand uses the shared rule, with the stock request type and the cut-off.
+    // Demand uses the shared rule and the cut-off.
     expect(tenant.$queryRawUnsafe).toHaveBeenCalledWith(
       expect.stringContaining('t."counts_as_demand"'),
       [9, 10],
       'America/Bogota',
       '2026-11-15',
-      3,
     );
   });
 });

@@ -40,7 +40,7 @@ Response:
 `CONFIRMED` outbound movements whose type has `counts_as_demand`, in the product's stock unit, by the warehouse of the line's origin location:
 
 - Sales ("Sales issue"), registered with `POST /movements`.
-- Internal consumption that fulfils a stock request. Movements of the stock request type (`settings.stock_request_movement_type_id`, "Consumption issue") count only when they have a `stock_request_id`; registered by hand they do not (RN-008).
+- Internal consumption ("Consumption issue"), registered by hand with `POST /movements` or by fulfilling a stock request (US-013). The second also carries the requesting department.
 
 Inbound movements, adjustments and transfers never count. The series is computed on each request from `movements` and `movement_lines` (no stored table).
 

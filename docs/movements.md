@@ -37,7 +37,7 @@ Request body:
 
 ## Movement types
 
-`GET /movement-types` lists them. Every organization starts with the base types (`isBase`): "Opening balance" and "Purchase receipt" (`INBOUND`), "Consumption issue" and "Sales issue" (`OUTBOUND`), "Transfer" (`TRANSFER`) and "Inventory adjustment" (`ADJUSTMENT`). Register sales from a store or warehouse with "Sales issue" and the invoice in `documentRef`. It counts as demand (`countsAsDemand`), like the consumption that fulfils a stock request ([`database.md`](database.md), demand history).
+`GET /movement-types` lists them. Every organization starts with the base types (`isBase`): "Opening balance" and "Purchase receipt" (`INBOUND`), "Consumption issue" and "Sales issue" (`OUTBOUND`), "Transfer" (`TRANSFER`) and "Inventory adjustment" (`ADJUSTMENT`). Register sales from a store or warehouse with "Sales issue" and the invoice in `documentRef`. It counts as demand (`countsAsDemand`), like internal consumption ("Consumption issue"), with or without a stock request ([`database.md`](database.md), demand history).
 
 ## Rules
 

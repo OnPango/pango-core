@@ -305,7 +305,6 @@ export class ForecastingService {
       })),
       historyEnd,
       timeZone,
-      stockRequestTypeId: settings?.stockRequestMovementTypeId ?? null,
     });
     if (series.length === 0) throw forecastErrors.nothingToForecast();
 

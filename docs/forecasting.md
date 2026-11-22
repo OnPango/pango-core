@@ -22,7 +22,7 @@ CU-10 (US-38, US-39): forecast runs through the external forecasting service (Py
 ## What Core sends
 
 - `history_end`: the last complete Sunday in `settings.time_zone` (on Monday, the day before). Nothing after it is sent.
-- `demand`: per local day, the gross demand of the day (the shared demand rule of [`demand.md`](demand.md): sales and internal consumption that fulfils stock requests). Only days with demand; quantities are never negative.
+- `demand`: per local day, the gross demand of the day (the shared demand rule of [`demand.md`](demand.md): sales and internal consumption, with or without a stock request). Only days with demand; quantities are never negative.
 - `stock`: per local day, the closing stock of the days it changed, rebuilt from every confirmed (and voided) movement of the product in the warehouse, so it starts with the first stock that arrived. Negative stock (allowed by `settings.allow_negative_stock`) is sent as 0, a stockout.
 - `warehouses`: every warehouse of the run with `holds_stock` (`warehouses.holds_stock`, set by the administrator). The service declines the series of a warehouse that holds no stock.
 - `metadata` per series, for traceability: `sku`, `category`, `stock_unit`, `warehouse_code`, `warehouse_type`, `lead_time_days`.
