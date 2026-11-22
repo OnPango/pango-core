@@ -10,6 +10,7 @@ US-16 (manual safety stock and reorder point) and CU-12 / CU-12a (US-43, US-44):
 | `PUT /products/:productId/warehouses/:warehouseId/replenishment` | `replenishment.manage` in the warehouse | Set the parameters by hand. |
 | `GET /alerts?warehouseId=&productId=&status=&sort=&page=&pageSize=` | `alert.read` in the warehouse | Alerts: `{ items, total, page, pageSize }`. `sort`: `CREATED` (default, most recently raised first), `UPDATED` (most recently changed first, so an old alert that just got worse comes up) or `SEVERITY` (most severe first, then most recently changed). `pageSize` ≤ 100 (default 25). |
 | `GET /alerts/:id` | `alert.read` in the warehouse | One alert; `404` if you cannot read it. |
+| `PATCH /alerts/:id` `{ status: ATTENDED \| OPEN }` | `alert.resolve` in the warehouse | US-045: mark an alert in force as attended (records `attendedAt` and `attendedBy`) or as pending again. Same status: nothing changes. `404` if you cannot read it, `409 ALERT_CLOSED` once resolved. |
 
 `PUT` body:
 
@@ -28,7 +29,8 @@ US-16 (manual safety stock and reorder point) and CU-12 / CU-12a (US-43, US-44):
 - The reorder point is compared against **available** stock: on hand minus the reservations of `IN_PROGRESS` stock requests of that warehouse that have not expired ([`stock-requests.md`](stock-requests.md)).
 - Available ≤ reorder point, and no open alert of the product-warehouse: a `BELOW_ROP` alert opens (`OPEN`). At most one is open per product-warehouse and type (`alerts_open_key`), so it is never duplicated while the condition persists.
 - Available ≤ reorder point, with an alert already open: the open alert is refreshed with the current `severity`, `availableQuantity`, `suggestedQuantity`, `reorderPoint`, `reorderPointSource` and `message` (e.g. it goes from `1` to `3` when the stock reaches 0, or back down when stock comes in but stays below the reorder point). `createdAt` keeps the date it was raised; `updatedAt` records when its values last changed. Nothing is written if nothing changed.
-- Available > reorder point: the open alert becomes `RESOLVED` with `resolvedAt`.
+- Available > reorder point: the alert in force becomes `RESOLVED` with `resolvedAt`.
+- An alert in force is `OPEN` (pending) or `ATTENDED` (someone took charge, US-045). Attended alerts follow every rule above: they are refreshed, never duplicated and resolved by the evaluation, keeping `attendedAt` and `attendedBy`. When the evaluation raises the severity of an attended alert, it goes back to `OPEN` and loses who attended it: what was done is no longer enough. Marking by hand takes the product's row lock too.
 - A reorder point of `0` means none: no alert is raised, and an open one is resolved. Same for an inactive product, product-warehouse or warehouse.
 - `resolution` says why it was resolved: `STOCK_RECOVERED` (available rose above the reorder point the alert last showed), `REORDER_POINT_CHANGED` (the point was lowered below the available stock), `NO_REORDER_POINT` (set to 0) or `INACTIVE` (the product, product-warehouse or warehouse was deactivated). Null while open, and for alerts resolved before the `alert_resolution` migration. Since a resolved alert keeps the values of its last evaluation, `REORDER_POINT_CHANGED` is what explains one that still reads below its reorder point.
 - An open alert shows the values of the last evaluation; a resolved one keeps those it had when it was resolved: `availableQuantity`, `reorderPoint` and `reorderPointSource` (`MANUAL` or `CALCULATED`), plus a `message`.
@@ -38,7 +40,7 @@ US-16 (manual safety stock and reorder point) and CU-12 / CU-12a (US-43, US-44):
 ## Not done yet
 
 - Draft replenishment movement linked to the alert (`alerts.draft_movement_id`, `settings.replenishment_movement_type_id`): needs draft movements (CU-16).
-- Marking an alert as attended or dismissed by hand (`alert.resolve`, S6).
+- Dismissing an alert by hand with a reason (`DISMISSED`, `alert.resolve`).
 - Notifications to the configured roles (`notification_rules`, S7).
 - `STOCKOUT` and `OVERSTOCK` alert types; a stockout is a `BELOW_ROP` alert with severity 3.
 - Calculated reorder point from the forecast (CU-11, US-40).

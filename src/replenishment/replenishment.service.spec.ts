@@ -1,15 +1,17 @@
 import type { HttpException } from '@nestjs/common';
 import type { AuthContext, RoleGrant } from '../auth/auth-context.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
+import type { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
-import type { SetReplenishmentDto } from './dto.js';
+import { AlertManualStatus, type SetReplenishmentDto } from './dto.js';
 import { evaluateAlerts } from './evaluate-alerts.js';
 import {
   ReplenishmentService,
   replenishmentProblem,
 } from './replenishment.service.js';
 
-vi.mock('./evaluate-alerts.js', () => ({
+vi.mock('./evaluate-alerts.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./evaluate-alerts.js')>()),
   evaluateAlerts: vi.fn(),
   stockLevels: vi.fn((_tx: unknown, pws: { id: number }[]) =>
     Promise.resolve(
@@ -80,6 +82,9 @@ const storedAlert = {
   createdAt: new Date('2026-11-07'),
   updatedAt: new Date('2026-11-07'),
   resolvedAt: null,
+  resolution: null,
+  attendedAt: null,
+  attendedById: null,
   productWarehouse: { product, warehouse: north },
 };
 
@@ -107,6 +112,10 @@ function setup() {
       findUnique: vi.fn().mockResolvedValue(storedAlert),
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
+    user: {
+      findMany: vi.fn().mockResolvedValue([{ id: 4, accountId: 40 }]),
     },
     $queryRawUnsafe: vi.fn().mockResolvedValue([{ id: 5 }]),
     $transaction: vi.fn(),
@@ -114,10 +123,16 @@ function setup() {
   tenant.$transaction.mockImplementation((fn: (tx: unknown) => unknown) =>
     fn(tenant),
   );
-  const service = new ReplenishmentService({
-    client: () => tenant,
-  } as unknown as TenantPrismaService);
-  return { tenant, service };
+  const control = {
+    account: {
+      findMany: vi.fn().mockResolvedValue([{ id: 40, name: 'Beto' }]),
+    },
+  };
+  const service = new ReplenishmentService(
+    { client: () => tenant } as unknown as TenantPrismaService,
+    control as unknown as ControlPrismaService,
+  );
+  return { tenant, control, service };
 }
 
 const parameters: SetReplenishmentDto = {
@@ -246,6 +261,110 @@ describe('ReplenishmentService alerts', () => {
       expect.objectContaining({
         where: { productWarehouse: { warehouseId: { in: [1] }, productId: 5 } },
       }),
+    );
+  });
+});
+
+describe('ReplenishmentService.setAlertStatus', () => {
+  const inWarehouse = {
+    ...storedAlert,
+    productWarehouse: {
+      ...storedAlert.productWarehouse,
+      productId: 5,
+      warehouseId: 1,
+    },
+  };
+  const attend = { status: AlertManualStatus.ATTENDED };
+
+  it('needs alert.resolve in the warehouse, and hides unreadable alerts', async () => {
+    const { tenant, service } = setup();
+    tenant.alert.findUnique.mockResolvedValue(inWarehouse);
+    const south = authWith(['alert.read', 'alert.resolve'], {
+      id: 2,
+      name: 'S',
+    });
+    expect(await errorCode(service.setAlertStatus(south, 3, attend))).toBe(
+      'ALERT_NOT_FOUND',
+    );
+    const reader = authWith(['alert.read']);
+    expect(await errorCode(service.setAlertStatus(reader, 3, attend))).toBe(
+      'FORBIDDEN',
+    );
+    expect(tenant.alert.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('marks it attended under the product lock and says who did it', async () => {
+    const { tenant, service } = setup();
+    tenant.alert.findUnique
+      .mockResolvedValueOnce(inWarehouse)
+      .mockResolvedValueOnce({
+        ...storedAlert,
+        status: 'ATTENDED',
+        attendedAt: new Date('2026-11-22'),
+        attendedById: 4,
+      });
+    const alert = await service.setAlertStatus(
+      authWith(['alert.read', 'alert.resolve']),
+      3,
+      attend,
+    );
+
+    expect(tenant.$queryRawUnsafe.mock.calls[0][0]).toContain('FOR UPDATE');
+    expect(tenant.$queryRawUnsafe.mock.calls[0][1]).toBe(5);
+    const { where, data } = tenant.alert.updateMany.mock.calls[0][0];
+    expect(where).toEqual({ id: 3, status: { in: ['OPEN', 'ATTENDED'] } });
+    expect(data).toMatchObject({ status: 'ATTENDED', attendedById: 1 });
+    expect(alert).toMatchObject({
+      status: 'ATTENDED',
+      attendedBy: { id: 4, name: 'Beto' },
+    });
+  });
+
+  it('puts it back to pending, clearing who attended it', async () => {
+    const { tenant, service } = setup();
+    tenant.alert.findUnique.mockResolvedValue({
+      ...inWarehouse,
+      status: 'ATTENDED',
+    });
+    await service.setAlertStatus(authWith(['alert.read', 'alert.resolve']), 3, {
+      status: AlertManualStatus.OPEN,
+    });
+    expect(tenant.alert.updateMany.mock.calls[0][0].data).toMatchObject({
+      status: 'OPEN',
+      attendedAt: null,
+      attendedById: null,
+    });
+  });
+
+  it('changes nothing when it already has that status', async () => {
+    const { tenant, service } = setup();
+    tenant.alert.findUnique.mockResolvedValue({
+      ...inWarehouse,
+      status: 'ATTENDED',
+    });
+    await service.setAlertStatus(
+      authWith(['alert.read', 'alert.resolve']),
+      3,
+      attend,
+    );
+    expect(tenant.alert.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects resolved alerts, also when one resolves meanwhile', async () => {
+    const { tenant, service } = setup();
+    const actor = authWith(['alert.read', 'alert.resolve']);
+    tenant.alert.findUnique.mockResolvedValue({
+      ...inWarehouse,
+      status: 'RESOLVED',
+    });
+    expect(await errorCode(service.setAlertStatus(actor, 3, attend))).toBe(
+      'ALERT_CLOSED',
+    );
+
+    tenant.alert.findUnique.mockResolvedValue(inWarehouse);
+    tenant.alert.updateMany.mockResolvedValue({ count: 0 });
+    expect(await errorCode(service.setAlertStatus(actor, 3, attend))).toBe(
+      'ALERT_CLOSED',
     );
   });
 });

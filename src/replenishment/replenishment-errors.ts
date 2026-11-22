@@ -4,6 +4,12 @@ import { apiError } from '../auth/auth-errors.js';
 export const replenishmentErrors = {
   alertNotFound: () =>
     apiError(HttpStatus.NOT_FOUND, 'ALERT_NOT_FOUND', 'Alert not found'),
+  alertClosed: () =>
+    apiError(
+      HttpStatus.CONFLICT,
+      'ALERT_CLOSED',
+      'The alert is no longer in force; only pending or attended alerts change',
+    ),
   productNotFound: () =>
     apiError(
       HttpStatus.NOT_FOUND,
