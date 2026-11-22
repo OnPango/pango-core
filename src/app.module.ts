@@ -16,6 +16,7 @@ import { DepartmentsModule } from './departments/departments.module.js';
 import { OrganizationsModule } from './organizations/organizations.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RolesModule } from './roles/roles.module.js';
+import { SearchModule } from './search/search.module.js';
 import { TenancyModule } from './tenancy/tenancy.module.js';
 import { UsersModule } from './users/users.module.js';
 import { WarehousesModule } from './warehouses/warehouses.module.js';
@@ -33,6 +34,7 @@ import { WarehousesModule } from './warehouses/warehouses.module.js';
     RolesModule,
     CatalogModule,
     WarehousesModule,
+    SearchModule,
     MovementsModule,
     ReplenishmentModule,
     DepartmentsModule,
