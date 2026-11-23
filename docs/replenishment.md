@@ -1,13 +1,13 @@
 # Pango — Replenishment parameters and stock alerts
 
-US-16 (manual safety stock and reorder point) and CU-12 / CU-12a (US-43, US-44): replenishment parameters per product and warehouse, and the alerts raised when available stock reaches the reorder point. Code: `src/replenishment/`. Data model: `product_warehouses` and `alerts` in [`database.md`](database.md).
+US-16 (manual safety stock and reorder point), CU-11 (US-40, calculated from the forecast) and CU-12 / CU-12a (US-43, US-44): replenishment parameters per product and warehouse, and the alerts raised when available stock reaches the reorder point. Code: `src/replenishment/`. Data model: `product_warehouses` and `alerts` in [`database.md`](database.md).
 
 ## Endpoints
 
 | Endpoint | Access | Purpose |
 |---|---|---|
 | `GET /products/:productId/warehouses/:warehouseId/replenishment` | `stock.read` in the warehouse | Parameters, stock (`onHand`, `reserved`, `available`) and open alert of a product in a warehouse. A product not yet enabled there answers the defaults. |
-| `PUT /products/:productId/warehouses/:warehouseId/replenishment` | `replenishment.manage` in the warehouse | Set the parameters by hand. |
+| `PUT /products/:productId/warehouses/:warehouseId/replenishment` | `replenishment.manage` in the warehouse | Set the manual parameters, the method and the lead time. |
 | `GET /alerts?warehouseId=&productId=&status=&sort=&page=&pageSize=` | `alert.read` in the warehouse | Alerts: `{ items, total, page, pageSize }`. `sort`: `CREATED` (default, most recently raised first), `UPDATED` (most recently changed first, so an old alert that just got worse comes up) or `SEVERITY` (most severe first, then most recently changed). `pageSize` ≤ 100 (default 25). |
 | `GET /alerts/:id` | `alert.read` in the warehouse | One alert; `404` if you cannot read it. |
 | `PATCH /alerts/:id` `{ status: ATTENDED \| OPEN }` | `alert.resolve` in the warehouse | US-045: mark an alert in force as attended (records `attendedAt` and `attendedBy`) or as pending again. Same status: nothing changes. `404` if you cannot read it, `409 ALERT_CLOSED` once resolved. |
@@ -15,13 +15,39 @@ US-16 (manual safety stock and reorder point) and CU-12 / CU-12a (US-43, US-44):
 `PUT` body:
 
 ```json
-{ "safetyStock": 10, "reorderPoint": 30, "minStock": null, "maxStock": 120 }
+{
+  "safetyStock": 10, "reorderPoint": 30, "minStock": null, "maxStock": 120,
+  "replenishmentMethod": "FORECAST_ROP", "leadTimeDays": 7
+}
 ```
 
 - Quantities are in the product's stock unit, not negative, up to 4 decimals. `minStock` and `maxStock` are optional; omitted or `null` clears them.
 - `safetyStock ≤ reorderPoint` (unless the reorder point is 0), `minStock ≤ maxStock` and `reorderPoint ≤ maxStock`; otherwise `400 REPLENISHMENT_INVALID`.
 - The product and the warehouse must exist and be active (`404 PRODUCT_NOT_FOUND`, `404 WAREHOUSE_NOT_FOUND`).
-- The values are saved as `MANUAL` (`valueSource`), replacing calculated ones, and the product is enabled in the warehouse if it was not.
+- `safetyStock` and `reorderPoint` are saved as the manual values (`manualSafetyStock`, `manualReorderPoint`); which values are in force follows from the method (below). The product is enabled in the warehouse if it was not.
+- `replenishmentMethod`: `FIXED_ROP` or `FORECAST_ROP`; `leadTimeDays`: 1 to 365. Omitted = keep the current ones (`FIXED_ROP` and 7 for a product not yet enabled).
+- The response adds `replenishmentMethod`, `leadTimeDays`, the manual values, `valueSource`, `baseForecastId`, `calculatedAt` and `calculationIssue`.
+
+## Calculated reorder point (CU-11)
+
+`safetyStock` and `reorderPoint` are the values **in force**, the ones alerts compare against. Where they come from depends on `replenishmentMethod`:
+
+- `FIXED_ROP` (default): the manual values, `valueSource = MANUAL`.
+- `FORECAST_ROP`: computed from the product-warehouse's current `OK` forecast ([`forecasting.md`](forecasting.md)) and its lead time, `valueSource = CALCULATED`, with `baseForecastId` (the forecast used) and `calculatedAt`. The manual values stay as the fallback.
+
+Upper-band method: the forecast's calibrated total interval of the horizon (`total.estimate`, `total.upper`, H = horizon weeks × 7 days) is scaled to the lead time L in days. Expected demand scales linearly; the band, like the spread of a sum of independent periods, with the square root:
+
+```text
+expected      = estimate × L / H
+safety stock  = (upper − estimate) × √(L / H)
+reorder point = expected + safety stock
+```
+
+Both are rounded up to 4 decimals. The service level is the one the forecasting service calibrated its interval to; `product_warehouses.service_level` is not used yet. Example: 4 weeks with total 91 [68.8, 107.5] and L = 7 → expected 22.75, safety stock 8.25, reorder point 31.
+
+When it cannot be computed, the manual values are in force (`valueSource = MANUAL`) and `calculationIssue` says why: `NO_FORECAST` (no current `OK` forecast: never forecast, declined by the service, or every run failed for it), `NO_INTERVAL` (the forecast has no horizon interval) or `NO_LEAD_TIME`.
+
+It is recalculated, and the alert re-evaluated, after every forecast run (in its transaction, for the product-warehouses of the run) and on every `PUT`. A calculated reorder point may exceed `maxStock`; then the alert suggests ordering up to the reorder point.
 
 ## Alert rules (CU-12a)
 
@@ -43,4 +69,5 @@ US-16 (manual safety stock and reorder point) and CU-12 / CU-12a (US-43, US-44):
 - Dismissing an alert by hand with a reason (`DISMISSED`, `alert.resolve`).
 - Notifications to the configured roles (`notification_rules`, S7).
 - `STOCKOUT` and `OVERSTOCK` alert types; a stockout is a `BELOW_ROP` alert with severity 3.
-- Calculated reorder point from the forecast (CU-11, US-40).
+- Using `service_level` in the calculation (needs the service's interval level or error spread).
+- A form of the method for `MIN_MAX`; it behaves as `FIXED_ROP`.

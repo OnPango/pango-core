@@ -12,6 +12,11 @@ import { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
 import {
+  evaluateAlerts,
+  lockAlertScope,
+} from '../replenishment/evaluate-alerts.js';
+import { refreshReorderPoints } from '../replenishment/reorder-point.js';
+import {
   CONTRACT_VERSION,
   type ForecastRequest,
   type ForecastSeriesInput,
@@ -327,7 +332,7 @@ export class ForecastingService {
       warehouse_id: warehouseId,
       holds_stock: holds,
     }));
-    void this.execute(tenant, run, series, warehouses);
+    void this.execute(tenant, schema, run, series, warehouses);
     const [dto0] = await this.toRunDtos([run]);
     return dto0;
   }
@@ -336,10 +341,13 @@ export class ForecastingService {
    * Sends the series in batches and stores every result in one transaction. If
    * any call fails, the run is FAILED and nothing is stored (CU-10 E2). The run
    * ends COMPLETED, or PARTIAL when some series failed (ERROR); declined series
-   * (NO_FORECAST) are decisions, not failures.
+   * (NO_FORECAST) are decisions, not failures. In the same transaction, the
+   * FORECAST_ROP product-warehouses get their reorder point recalculated from
+   * the new current forecast (CU-11) and their alerts re-evaluated.
    */
   async execute(
     tenant: Tx & { $transaction: Prisma.TransactionClient['$transaction'] },
+    schema: string,
     run: { id: number; requestId: string; horizon: number; historyEnd: Date },
     series: ForecastSeriesInput[],
     warehouses: ForecastRequest['warehouses'],
@@ -432,6 +440,11 @@ export class ForecastingService {
               finishedAt: new Date(),
             },
           });
+          await this.recalculateReorderPoints(
+            tx,
+            schema,
+            rows.map((r) => r.productWarehouseId),
+          );
         },
         { timeout: 120_000 },
       );
@@ -451,6 +464,33 @@ export class ForecastingService {
           this.logger.error(`forecast_run_id=${run.id}: ${e.message}`),
         );
     }
+  }
+
+  /**
+   * CU-11: recalculates the reorder point of the run's FORECAST_ROP
+   * product-warehouses and re-evaluates their alerts. The products of every
+   * series are locked first (in id order, as movements do), so the method, lead
+   * time and current forecast are read under the lock: a concurrent PUT that
+   * switches a row to FORECAST_ROP either commits first and is seen here, or
+   * waits and then reads this run's forecast.
+   */
+  private async recalculateReorderPoints(
+    tx: Tx,
+    schema: string,
+    productWarehouseIds: number[],
+  ): Promise<void> {
+    const locked = await lockAlertScope(tx, schema, {
+      id: { in: productWarehouseIds },
+    });
+    if (locked.length === 0) return;
+    const targets = await tx.productWarehouse.findMany({
+      where: { id: { in: locked }, replenishmentMethod: 'FORECAST_ROP' },
+      select: { id: true },
+    });
+    if (targets.length === 0) return;
+    const ids = targets.map((pw) => pw.id);
+    await refreshReorderPoints(tx, ids);
+    await evaluateAlerts(tx, ids);
   }
 
   async listRuns(

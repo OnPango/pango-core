@@ -36,6 +36,8 @@ One `forecasts` row per series sent, never overwriting earlier ones (RF-PRED-004
 - `NO_FORECAST`: the service declined the series on purpose, with its `reason` (`inactive`, `non_stock_warehouse`, `history_only`, `sold_to_order`, `no_active_warehouse`). It is a decision, not a failure: it is counted in `seriesNoForecast`, not retried, and the previous current forecast stops being current.
 - `ERROR`: the service's code and message (e.g. `INSUFFICIENT_HISTORY`), and the profile when the service got that far. A missing result is stored as `MISSING_RESULT`, and an `ok` result with malformed periods (not `0 ≤ lower ≤ estimate ≤ upper`) as `INVALID_RESPONSE`, so one bad series never fails the run.
 
+In the same transaction, the products of the run are locked (in id order, as movements do), and then the product-warehouses with `replenishmentMethod = FORECAST_ROP` get their safety stock and reorder point recalculated from the new current forecast, and their alerts re-evaluated (CU-11, [`replenishment.md`](replenishment.md#calculated-reorder-point-cu-11)).
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -50,6 +52,5 @@ One `forecasts` row per series sent, never overwriting earlier ones (RF-PRED-004
 
 - Calendar of closed dates (`calendar.closed_dates`, `closed_dates_by_warehouse`): there is no table for them yet.
 - Forecast evaluation (`POST /v1/forecast-evaluations`) after the horizon has elapsed, and its metrics.
-- Calculated safety stock and reorder point from the forecast (CU-11, US-40).
 - Scheduled runs; runs are started by hand.
 - History imported from the organization's previous system (T-01, CU-17).

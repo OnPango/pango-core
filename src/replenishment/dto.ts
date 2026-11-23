@@ -36,6 +36,14 @@ export class SetAlertStatusDto {
   status: AlertManualStatus;
 }
 
+/** Methods that can be set: how the reorder point in force is obtained. */
+export enum ReorderMethod {
+  /** The manual values are in force. */
+  FIXED_ROP = 'FIXED_ROP',
+  /** Computed from the current forecast; the manual values are the fallback. */
+  FORECAST_ROP = 'FORECAST_ROP',
+}
+
 /** Order of `GET /alerts`. */
 export enum AlertSort {
   /** Most recently raised first (default). */
@@ -96,6 +104,33 @@ export class SetReplenishmentDto {
   @Min(0)
   @Max(MAX_QUANTITY)
   maxStock?: number | null;
+
+  @ApiPropertyOptional({
+    enum: ReorderMethod,
+    enumName: 'ReorderMethod',
+    description:
+      '`FIXED_ROP`: the values above are in force. `FORECAST_ROP`: the safety stock ' +
+      'and reorder point are computed from the current forecast and the lead time, ' +
+      'and the values above are the fallback when that is not possible. Omitted = ' +
+      'keep the current one (`FIXED_ROP` for a product not yet enabled)',
+  })
+  @IsOptional()
+  @IsEnum(ReorderMethod)
+  replenishmentMethod?: ReorderMethod;
+
+  @ApiPropertyOptional({
+    example: 7,
+    minimum: 1,
+    maximum: 365,
+    description:
+      'Days from ordering to having the stock available. Omitted = keep the current ' +
+      'one (7 for a product not yet enabled)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  leadTimeDays?: number;
 }
 
 export class ListAlertsQueryDto {

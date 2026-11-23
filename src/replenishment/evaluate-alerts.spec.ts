@@ -103,6 +103,8 @@ describe('alert helpers', () => {
     expect(suggestedQuantity(D(8), D(10), D(50)).toNumber()).toBe(42);
     expect(suggestedQuantity(D(-2), D(10), null).toNumber()).toBe(12);
     expect(suggestedQuantity(D(10), D(10), null).toNumber()).toBe(0);
+    // A calculated reorder point above the max stock: order up to the point.
+    expect(suggestedQuantity(D(20), D(35), D(30)).toNumber()).toBe(15);
   });
 
   it('subtracts active reservations of the same warehouse', async () => {

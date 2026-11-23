@@ -71,8 +71,11 @@ export class ReplenishmentController {
   @ApiOperation({
     summary: 'Set replenishment parameters by hand',
     description:
-      'Sets the values as `MANUAL` (replacing calculated ones) and enables the product ' +
-      'in the warehouse if needed. The alert is re-evaluated at once: one opens if ' +
+      'Saves the manual values, the method and the lead time, and enables the product ' +
+      'in the warehouse if needed. With `FIXED_ROP` the manual values are in force; ' +
+      'with `FORECAST_ROP` the safety stock and reorder point are recalculated from ' +
+      'the current forecast, falling back to the manual values (`calculationIssue`). ' +
+      'The alert is re-evaluated at once: one opens if ' +
       'available stock is at or below the new reorder point, and the open one resolves ' +
       `otherwise. ${requiresPermissions('replenishment.manage')} (in the warehouse)`,
   })

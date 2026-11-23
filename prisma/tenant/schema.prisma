@@ -596,8 +596,15 @@ model ProductWarehouse {
   safetyStock         Decimal             @default(0) @map("safety_stock") @db.Decimal(14, 4)
   /// Compared against available stock (on hand − reserved), not on hand.
   reorderPoint        Decimal             @default(0) @map("reorder_point") @db.Decimal(14, 4)
-  /// Whether the parameters above were set by hand or computed by the forecast.
+  /// Whether the safety stock and reorder point in force were set by hand or computed from the forecast.
   valueSource         ValueSource         @default(MANUAL) @map("value_source")
+  /// Values set by hand: in force with FIXED_ROP, the fallback with FORECAST_ROP.
+  manualSafetyStock   Decimal             @default(0) @map("manual_safety_stock") @db.Decimal(14, 4)
+  manualReorderPoint  Decimal             @default(0) @map("manual_reorder_point") @db.Decimal(14, 4)
+  /// When the values in force were last computed from the forecast (FORECAST_ROP).
+  calculatedAt        DateTime?           @map("calculated_at") @db.Timestamptz
+  /// Why FORECAST_ROP fell back to the manual values, e.g. NO_FORECAST.
+  calculationIssue    String?             @map("calculation_issue") @db.VarChar(40)
   isActive            Boolean             @default(true) @map("is_active")
   createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz

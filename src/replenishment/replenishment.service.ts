@@ -22,6 +22,10 @@ import {
   IN_FORCE,
   stockLevels,
 } from './evaluate-alerts.js';
+import {
+  type CalculationIssue,
+  refreshReorderPoints,
+} from './reorder-point.js';
 import { replenishmentErrors } from './replenishment-errors.js';
 import type { AlertDto, AlertPageDto, ReplenishmentDto } from './responses.js';
 
@@ -149,28 +153,39 @@ export class ReplenishmentService {
     const tenant = this.tenant(auth);
     await this.assertUsable(tenant, productId, warehouseId);
     const schema = assertTenantSchema(auth.organization.schemaName);
+    // The manual values; which ones are in force follows from the method.
     const values = {
-      safetyStock: new Decimal(dto.safetyStock),
-      reorderPoint: new Decimal(dto.reorderPoint),
+      manualSafetyStock: new Decimal(dto.safetyStock),
+      manualReorderPoint: new Decimal(dto.reorderPoint),
       minStock: dto.minStock == null ? null : new Decimal(dto.minStock),
       maxStock: dto.maxStock == null ? null : new Decimal(dto.maxStock),
-      valueSource: 'MANUAL' as const,
+      ...(dto.replenishmentMethod && {
+        replenishmentMethod: dto.replenishmentMethod,
+      }),
+      ...(dto.leadTimeDays !== undefined && {
+        leadTimeDays: dto.leadTimeDays,
+      }),
     };
 
-    await tenant.$transaction(async (tx) => {
-      // Same lock as movements, so the alert evaluation never races with one.
-      await tx.$queryRawUnsafe(
-        `SELECT "id" FROM "${schema}"."products" WHERE "id" = $1 FOR UPDATE`,
-        productId,
-      );
-      const pw = await tx.productWarehouse.upsert({
-        where: { productId_warehouseId: { productId, warehouseId } },
-        create: { productId, warehouseId, ...values },
-        update: values,
-        select: { id: true },
-      });
-      await evaluateAlerts(tx, [pw.id]);
-    });
+    await tenant.$transaction(
+      async (tx) => {
+        // Same lock as movements, so the alert evaluation never races with one.
+        await tx.$queryRawUnsafe(
+          `SELECT "id" FROM "${schema}"."products" WHERE "id" = $1 FOR UPDATE`,
+          productId,
+        );
+        const pw = await tx.productWarehouse.upsert({
+          where: { productId_warehouseId: { productId, warehouseId } },
+          create: { productId, warehouseId, ...values },
+          update: values,
+          select: { id: true },
+        });
+        await refreshReorderPoints(tx, [pw.id]);
+        await evaluateAlerts(tx, [pw.id]);
+        // The product lock may be held by a movement or a forecast run.
+      },
+      { timeout: 20_000 },
+    );
     return this.load(tenant, productId, warehouseId);
   }
 
@@ -391,11 +406,19 @@ export class ReplenishmentService {
       onHand: level?.onHand.toNumber() ?? 0,
       reserved: level?.reserved.toNumber() ?? 0,
       available: level?.available.toNumber() ?? 0,
+      replenishmentMethod: pw?.replenishmentMethod ?? 'FIXED_ROP',
+      leadTimeDays: pw?.leadTimeDays ?? 7,
       safetyStock: pw?.safetyStock.toNumber() ?? 0,
       reorderPoint: pw?.reorderPoint.toNumber() ?? 0,
+      manualSafetyStock: pw?.manualSafetyStock.toNumber() ?? 0,
+      manualReorderPoint: pw?.manualReorderPoint.toNumber() ?? 0,
       minStock: pw?.minStock?.toNumber() ?? null,
       maxStock: pw?.maxStock?.toNumber() ?? null,
       valueSource: pw?.valueSource ?? 'MANUAL',
+      baseForecastId: pw?.baseForecastId ?? null,
+      calculatedAt: pw?.calculatedAt ?? null,
+      calculationIssue:
+        (pw?.calculationIssue as CalculationIssue | null | undefined) ?? null,
       openAlert: inForce
         ? {
             ...inForce,
