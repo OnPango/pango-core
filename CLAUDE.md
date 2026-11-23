@@ -4,6 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Pango core: the NestJS backend of a multi-tenant inventory SaaS for Colombian SMEs (pymes), with demand forecasting (a separate Python AI service lives outside this repo). The product catalog API is in `docs/catalog.md`; warehouses in `docs/warehouses.md`; inventory movements in `docs/movements.md`; stock queries and lots in `docs/stock.md`; replenishment parameters and stock alerts in `docs/replenishment.md`; departments and internal stock requests in `docs/stock-requests.md`; the demand history in `docs/demand.md`; demand forecasting (runs through the Python service) in `docs/forecasting.md`; the header's cross-module search in `docs/search.md`. The database design — conventions, tables, constraints, business rules, planned views, provisioning and the schema-change workflow — is in `docs/database.md`; read it before touching the data model.
 
+## Roles
+
+Claude is the senior developer; Codex is the principal software architect (its rules are in `AGENTS.md`); the human user has final approval. The full workflow is in `docs/architecture-workflow.md`.
+
+- Claude implements the agreed scope: source, tests, migrations, dependencies, Swagger and the domain guide in `docs/` for any API change. Claude does not write or change ADRs, task definitions or their status; architecture concerns go to the user as a proposal.
+- Work from a task that states objective, scope, constraints, dependencies, acceptance criteria, validation requirements and out-of-scope items. If the task is missing, incomplete or conflicts with the code, ask before building; don't widen the scope on your own.
+- Finish with an implementation report: what changed (files), how each acceptance criterion is met, and the validation commands run with their results. Only report checks as passing when they were actually run; mark the rest as not run.
+- Treat Codex's review findings as input to verify against the code, not as orders: fix the confirmed ones, and explain to the user any you disagree with.
+- Only the user approves a task or merges; don't commit or push unless asked.
+
 ## Language
 
 Everything written or created in the repo is in English: identifiers, comments, database tables/columns/enum values, seed data (roles, permissions, movement types), log and error strings, SQL comments and documentation. Conversation with the user is in Spanish.
