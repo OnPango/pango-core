@@ -88,7 +88,7 @@ Authentication and the invitation flow are described in [`auth.md`](auth.md).
 | `warehouses` | Storage warehouses (`WAREHOUSE`) and stores (`STORE`). Code and name unique in the organization (the name case-insensitively, checked by the application). `default_location_id` points to the location created with the warehouse. `holds_stock` is false for warehouses that never hold stock (not forecast). Never deleted, only deactivated (and only without stock on hand). |
 | `location_levels` | Named levels of a warehouse's location hierarchy, by `depth` (1 = top). |
 | `locations` | Places where stock is kept, arranged as a tree (`parent_id`). Each belongs to one warehouse (`warehouse_id`), with a code unique within it. `level_id` is NULL only for the warehouse's default location (code `DEFAULT`). |
-| `product_warehouses` | A product enabled in a warehouse, with its replenishment parameters (method, service level, lead time, min/max, safety stock, reorder point). |
+| `product_warehouses` | A product enabled in a warehouse, with its replenishment parameters (method, service level, lead time, min/max), the safety stock and reorder point in force (`value_source`; when `CALCULATED`, from `base_forecast_id` at `calculated_at`), the manual ones as fallback (`manual_safety_stock`, `manual_reorder_point`) and why a calculation fell back (`calculation_issue`). |
 | `lots` | Lots of products that track them. |
 | `stock_balances` | On-hand quantity per product-warehouse, location and lot. |
 

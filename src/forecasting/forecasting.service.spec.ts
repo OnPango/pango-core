@@ -9,6 +9,21 @@ import {
 } from './forecast-client.js';
 import { buildSeries } from './forecast-input.js';
 import { ForecastingService, toForecastRow } from './forecasting.service.js';
+import {
+  evaluateAlerts,
+  lockAlertScope,
+} from '../replenishment/evaluate-alerts.js';
+import { refreshReorderPoints } from '../replenishment/reorder-point.js';
+
+vi.mock('../replenishment/reorder-point.js', () => ({
+  refreshReorderPoints: vi.fn(),
+}));
+vi.mock('../replenishment/evaluate-alerts.js', () => ({
+  evaluateAlerts: vi.fn(),
+  lockAlertScope: vi.fn((_tx, _schema, where: { id: { in: number[] } }) =>
+    Promise.resolve(where.id.in),
+  ),
+}));
 
 const auth = {
   account: { id: 1 },
@@ -289,6 +304,7 @@ describe('ForecastingService.execute', () => {
 
     await service.execute(
       tenant as never,
+      'tenant_demo',
       run,
       [seriesOf(9), seriesOf(10)],
       [{ warehouse_id: 1, holds_stock: true }],
@@ -331,6 +347,22 @@ describe('ForecastingService.execute', () => {
         policyVersion: 'development-1',
       }),
     });
+    expect(tenant.forecastRun.update).toHaveBeenCalledTimes(1);
+    // CU-11: the products of every series are locked first; the FORECAST_ROP
+    // rows are then read under the lock, recalculated and their alerts
+    // re-evaluated.
+    expect(lockAlertScope).toHaveBeenCalledWith(tenant, 'tenant_demo', {
+      id: { in: [9, 10] },
+    });
+    expect(tenant.productWarehouse.findMany).toHaveBeenLastCalledWith({
+      where: { id: { in: [9, 10] }, replenishmentMethod: 'FORECAST_ROP' },
+      select: { id: true },
+    });
+    expect(vi.mocked(lockAlertScope).mock.invocationCallOrder[0]).toBeLessThan(
+      tenant.productWarehouse.findMany.mock.invocationCallOrder.at(-1)!,
+    );
+    expect(refreshReorderPoints).toHaveBeenCalledWith(tenant, [9]);
+    expect(evaluateAlerts).toHaveBeenCalledWith(tenant, [9]);
   });
 
   it('completes a run whose series were forecast or declined', async () => {
@@ -350,6 +382,7 @@ describe('ForecastingService.execute', () => {
 
     await service.execute(
       tenant as never,
+      'tenant_demo',
       run,
       [seriesOf(9), seriesOf(10)],
       [{ warehouse_id: 1, holds_stock: true }],
@@ -385,6 +418,7 @@ describe('ForecastingService.execute', () => {
 
     await service.execute(
       tenant as never,
+      'tenant_demo',
       run,
       [seriesOf(9), seriesOf(10)],
       [{ warehouse_id: 1, holds_stock: true }],

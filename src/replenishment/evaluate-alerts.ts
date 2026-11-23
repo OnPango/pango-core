@@ -35,13 +35,18 @@ export function alertSeverity(
   return 1;
 }
 
-/** Quantity that brings available stock up to the max stock, or else to the reorder point. */
+/**
+ * Quantity that brings available stock up to the max stock, or else to the
+ * reorder point. A calculated reorder point may exceed the max stock; then the
+ * target is the reorder point.
+ */
 export function suggestedQuantity(
   available: Decimal,
   reorderPoint: Decimal,
   maxStock: Decimal | null,
 ): Decimal {
-  return Decimal.max((maxStock ?? reorderPoint).sub(available), 0);
+  const target = Decimal.max(maxStock ?? reorderPoint, reorderPoint);
+  return Decimal.max(target.sub(available), 0);
 }
 
 /** Stock levels per product-warehouse; product-warehouses without stock get zeros. */
@@ -273,14 +278,15 @@ function sameValues(stored: AlertValues, next: AlertValues): boolean {
 
 /**
  * For changes that switch alerts on or off for many product-warehouses at once
- * (archiving a product, closing a warehouse): locks the rows of their products,
+ * (archiving a product, closing a warehouse, a forecast run): locks the rows of their products,
  * in id order like movements do, and returns the product-warehouse ids to pass
  * to `evaluateAlerts` once the change is written in the same transaction.
  */
 export async function lockAlertScope(
   tx: Tx,
   schema: string,
-  where: { productId: number } | { warehouseId: number },
+  where:
+    { productId: number } | { warehouseId: number } | { id: { in: number[] } },
 ): Promise<number[]> {
   const productWarehouses = await tx.productWarehouse.findMany({
     where,

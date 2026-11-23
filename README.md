@@ -30,7 +30,8 @@ The `dev` branch currently provides:
 - **Stock queries**: stock per warehouse, by location and lot, and lots with
   their expiry dates.
 - **Replenishment**: safety stock and reorder point per product and warehouse,
-  and stock alerts raised and resolved automatically.
+  set by hand or calculated from the forecast, and stock alerts raised and
+  resolved automatically.
 - **Demand history** per product and period, and **demand forecasting** runs
   through the Python forecasting service.
 - **Departments and internal stock requests**, with reservations, a status
@@ -324,7 +325,6 @@ capabilities:
 - Location hierarchies and product relocation.
 - Suppliers and supplier-product relationships.
 - Custom product attributes.
-- Lead times and calculated reorder points by product and warehouse.
 - Forecast evaluation, closed-date calendar and scheduled forecast runs.
 - In-app and email notifications.
 - Audit logs for user, catalog and warehouse changes.

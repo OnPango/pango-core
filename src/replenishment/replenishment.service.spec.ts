@@ -3,13 +3,19 @@ import type { AuthContext, RoleGrant } from '../auth/auth-context.js';
 import { Prisma } from '../generated/prisma/tenant/client.js';
 import type { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import type { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
-import { AlertManualStatus, type SetReplenishmentDto } from './dto.js';
+import {
+  AlertManualStatus,
+  ReorderMethod,
+  type SetReplenishmentDto,
+} from './dto.js';
 import { evaluateAlerts } from './evaluate-alerts.js';
+import { refreshReorderPoints } from './reorder-point.js';
 import {
   ReplenishmentService,
   replenishmentProblem,
 } from './replenishment.service.js';
 
+vi.mock('./reorder-point.js', () => ({ refreshReorderPoints: vi.fn() }));
 vi.mock('./evaluate-alerts.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./evaluate-alerts.js')>()),
   evaluateAlerts: vi.fn(),
@@ -100,11 +106,18 @@ function setup() {
         id: 9,
         productId: 5,
         warehouseId: 1,
+        replenishmentMethod: 'FIXED_ROP',
+        leadTimeDays: 7,
         safetyStock: D(5),
         reorderPoint: D(10),
+        manualSafetyStock: D(5),
+        manualReorderPoint: D(10),
         minStock: null,
         maxStock: D(50),
         valueSource: 'MANUAL',
+        baseForecastId: null,
+        calculatedAt: null,
+        calculationIssue: null,
         alerts: [],
       }),
     },
@@ -196,7 +209,7 @@ describe('ReplenishmentService.set', () => {
     expect(tenant.$transaction).not.toHaveBeenCalled();
   });
 
-  it('saves the values as manual under the product lock and re-evaluates the alert', async () => {
+  it('saves the manual values under the product lock, recalculates and re-evaluates the alert', async () => {
     const { tenant, service } = setup();
     const result = await service.set(
       authWith(['replenishment.manage']),
@@ -214,12 +227,12 @@ describe('ReplenishmentService.set', () => {
         create: expect.objectContaining({
           productId: 5,
           warehouseId: 1,
-          reorderPoint: D(10),
+          manualReorderPoint: D(10),
           minStock: null,
-          valueSource: 'MANUAL',
         }),
       }),
     );
+    expect(refreshReorderPoints).toHaveBeenCalledWith(tenant, [9]);
     expect(evaluateAlerts).toHaveBeenCalledWith(tenant, [9]);
     expect(result).toMatchObject({
       available: 12,
@@ -227,6 +240,24 @@ describe('ReplenishmentService.set', () => {
       maxStock: 50,
       openAlert: null,
     });
+  });
+
+  it('keeps the stored method and lead time when they are omitted', async () => {
+    const { tenant, service } = setup();
+    await service.set(authWith(['replenishment.manage']), 5, 1, parameters);
+    const { update } = tenant.productWarehouse.upsert.mock.calls[0][0];
+    expect(update).not.toHaveProperty('replenishmentMethod');
+    expect(update).not.toHaveProperty('leadTimeDays');
+    expect(update).not.toHaveProperty('reorderPoint');
+
+    const forecasting: SetReplenishmentDto = Object.assign(
+      { replenishmentMethod: ReorderMethod.FORECAST_ROP, leadTimeDays: 14 },
+      parameters,
+    );
+    await service.set(authWith(['replenishment.manage']), 5, 1, forecasting);
+    expect(
+      tenant.productWarehouse.upsert.mock.calls[1][0].update,
+    ).toMatchObject({ replenishmentMethod: 'FORECAST_ROP', leadTimeDays: 14 });
   });
 });
 
