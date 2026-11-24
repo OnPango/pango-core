@@ -2,17 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Pango core: the NestJS backend of a multi-tenant inventory SaaS for Colombian SMEs (pymes), with demand forecasting (a separate Python AI service lives outside this repo). The product catalog API is in `docs/modules/catalog.md`; warehouses in `docs/modules/warehouses.md`; inventory movements in `docs/modules/movements.md`; stock queries and lots in `docs/modules/stock.md`; replenishment parameters and stock alerts in `docs/modules/replenishment.md`; departments and internal stock requests in `docs/modules/stock-requests.md`; the demand history in `docs/modules/demand.md`; demand forecasting (runs through the Python service) in `docs/modules/forecasting.md`; the header's cross-module search in `docs/modules/search.md`; the dashboard figures in `docs/modules/dashboard.md`. The database design — conventions, tables, constraints, business rules, planned views, provisioning and the schema-change workflow — is in `docs/architecture/database.md`; read it before touching the data model.
+Pango core: the NestJS backend of a multi-tenant inventory SaaS for Colombian SMEs (pymes), with demand forecasting (a separate Python AI service lives outside this repo). The product catalog API is in `docs/modules/catalog.md`; warehouses in `docs/modules/warehouses.md`; inventory movements in `docs/modules/movements.md`; the kardex import of movement history in `docs/modules/movement-imports.md`; stock queries and lots in `docs/modules/stock.md`; replenishment parameters and stock alerts in `docs/modules/replenishment.md`; departments and internal stock requests in `docs/modules/stock-requests.md`; the demand history in `docs/modules/demand.md`; demand forecasting (runs through the Python service) in `docs/modules/forecasting.md`; the header's cross-module search in `docs/modules/search.md`; the dashboard figures in `docs/modules/dashboard.md`. The database design — conventions, tables, constraints, business rules, planned views, provisioning and the schema-change workflow — is in `docs/architecture/database.md`; read it before touching the data model.
 
 ## Roles
 
-Claude is the senior developer; Codex is the principal software architect (its rules are in `AGENTS.md`); the human user has final approval. The full workflow is in `docs/project/architecture-workflow.md`.
+Claude is the software architect and the senior developer; the human user has final approval and merges. Codex is only an occasional helper the user may ask for a second review or a plan draft; treat its output as input to verify against the code, not as orders.
 
-- Claude implements the agreed scope: source, tests, migrations, dependencies, Swagger and the domain guide in `docs/modules/` for any API change. Claude does not write or change ADRs, task definitions or their status; architecture concerns go to the user as a proposal.
-- Work from a task that states objective, scope, constraints, dependencies, acceptance criteria, validation requirements and out-of-scope items. If the task is missing, incomplete or conflicts with the code, ask before building; don't widen the scope on your own.
-- Finish with an implementation report: what changed (files), how each acceptance criterion is met, and the validation commands run with their results. Only report checks as passing when they were actually run; mark the rest as not run.
-- Treat Codex's review findings as input to verify against the code, not as orders: fix the confirmed ones, and explain to the user any you disagree with.
-- Only the user approves a task or merges; don't commit or push unless asked.
+- Analyze requirements, decide the architecture and record decisions with their reasons in `docs/project/project-context.md`; write plans for large features in `docs/plans/`.
+- Before building something non-trivial, agree the task with the user: objective, scope, acceptance criteria, validation and what is out of scope. Product decisions are the user's: give a recommendation with its trade-offs. Don't widen the scope on your own.
+- Implement with tests, migrations, Swagger and the domain guide in `docs/modules/`.
+- Finish with an implementation report: what changed, how each acceptance criterion is met, and the validation commands run with their results. Only report checks as passing when they were actually run; mark the rest as not run.
+- Don't commit or push unless asked.
 
 ## Language
 

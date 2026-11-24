@@ -5,3 +5,7 @@ allowBuilds:
   # Telemetry pulled in by swagger-ui-dist; not needed
   '@scarf/scarf': false
   prisma: true
+
+overrides:
+  # GHSA: multer < 2.5.0 DoS (transitive through @nestjs/platform-express).
+  multer: '^2.5.0'

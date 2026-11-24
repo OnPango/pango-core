@@ -1,10 +1,10 @@
 # Project Context
 
-Knowledge that is not visible in the code, the other guides or the Git history: decisions taken with the user, discarded work, findings and open questions. Read it after `CLAUDE.md`, `AGENTS.md`, `README.md` and [`database.md`](../architecture/database.md). Last updated 2026-11-23.
+Knowledge that is not visible in the code, the other guides or the Git history: decisions taken with the user, discarded work, findings and open questions. Read it after `CLAUDE.md`, `README.md` and [`database.md`](../architecture/database.md). Last updated 2026-11-24.
 
 ## Sources
 
-- **Repo:** the domain guides in `docs/modules/` (each ends with a "Not done yet" list), [`database.md`](../architecture/database.md) for the data model, [`architecture-workflow.md`](architecture-workflow.md) for roles.
+- **Repo:** the domain guides in `docs/modules/` (each ends with a "Not done yet" list) and [`database.md`](../architecture/database.md) for the data model.
 - **Requirements (outside the repo, Spanish):** SRS (RF-*, RNF-*, business rules RN-001..016), use cases CU-01..CU-18 and user stories US-001..047. They used to live in `~/Documents/OnPango/Backend/Context/`; ask the user for their current location. The user implements one CU at a time against them. The repo deliberately deviates in places (configurable RBAC with warehouse-scoped roles, invitations, replenishment parameters per product and warehouse); flag new deviations instead of silently following either side.
 - **Forecasting service:** a separate Python service, owned by a colleague of the user, called from `src/forecasting/` (default `http://localhost:8000`). Forecast runs cannot be tested end to end without it running.
 
@@ -12,9 +12,12 @@ Knowledge that is not visible in the code, the other guides or the Git history: 
 
 Merged into `dev`, in order: auth, organizations and invitations (CU-01/02), warehouses (CU-04), roles with warehouse scope, catalog (CU-03), inventory movements (CU-05), replenishment parameters and alerts (CU-12/12a), departments and internal stock requests (CU-08/09), stock queries and lots, demand history (CU-10 A1), forecast runs (CU-10, PR #24).
 
-CU-11 (US-40) is implemented on the feature branch in commit `1c07bfc`. See the [implementation task and validation record](../plans/cu-11-reorder-point.md#implementation-task-for-claude).
+Also merged: the calculated reorder point (CU-11, PR #33). Implemented, not merged yet: the movement history import (CU-17), on `feature/movement-import-preview`.
 
 ## Decisions taken with the user
+
+- **Roles (2026-11-24).** Claude is architect and senior developer; Codex only helps when the user asks (review or plan draft). Codex's plans and rules were removed on that date.
+- **Movement history import (CU-17), 2026-11-24.** Imported history exists only to feed the history and the forecast, from day one in Pango. It is completely isolated from inventory: it never changes stock, costs or alerts, and inventory never reads it. Current stock will come from a separate inventory import module and, after it, only from movements made in Pango, because the range and freshness of a company's history cannot be controlled. Users can see the imported history, shown apart from Pango's movements. Design and decisions: [CU-17 plan](../plans/cu-17-movement-history-import.md).
 
 - **Calculated reorder point (CU-11), approved design:**
   - Formula, upper-band method. H = forecast horizon in days (weeks × 7), L = lead time in days:
@@ -31,7 +34,7 @@ CU-11 (US-40) is implemented on the feature branch in commit `1c07bfc`. See the 
 
 ## Discarded work
 
-On 2026-11-23 the user discarded an implementation of CU-11 plus a connection-pool change. It is kept in a Git stash on the user's machine ("reorder-point CU-11 + shared pg pool (discarded)"). Its migration was reverted in every tenant. Treat it as reference only; a new task must be approved before any of it returns.
+On 2026-11-23 the user discarded a first implementation of CU-11 plus a connection-pool change; its migration was reverted in every tenant and the stash was later deleted. CU-11 was then reimplemented and merged. The connection-pool change is described below.
 
 ## Performance findings (not yet addressed)
 
@@ -62,4 +65,7 @@ On 2026-11-23 the user discarded an implementation of CU-11 plus a connection-po
 - Run `pnpm prisma:generate` after any schema change; `src/generated/` is not committed.
 - Specs can pass falsely: a service that catches errors and marks a run as failed still satisfies loose assertions. Assert exact call counts and final states, and mock the modules a transaction calls.
 - Never write credentials or tokens into the repo; pass them through environment variables.
+- Unit tests mock `$queryRawUnsafe`, so they cannot catch SQL that only fails on PostgreSQL (e.g. selecting a `void` function such as `pg_advisory_xact_lock` through `$queryRawUnsafe`; use `$executeRawUnsafe`). Validate raw SQL live against Supabase.
+- The global `ValidationPipe` (class-transformer) silently drops `__proto__` and `constructor` keys from request bodies; check other unknown keys explicitly.
 - Leftover test data: in tenant `tenant_forecast_test`, product CAS-SEG in its "Bodega" warehouse is `FORECAST_ROP` with lead time 70, reorder point 28.62 and an open alert.
+- More leftover test data in `tenant_forecast_test`: two test accounts, `import-admin@forecast-test.pango.local` (Admin in TIENDA-NORTE) and `import-operator@forecast-test.pango.local` (Operator); history imports with namespaces `live-*` and `proto-check`; 7 historical lines of TOR-M8 in BOD-PRINCIPAL (2025, and one on 2026-05-10 after the cutover).

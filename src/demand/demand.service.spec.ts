@@ -68,7 +68,7 @@ function setup(
       }),
     },
     $queryRawUnsafe: vi.fn((sql: string, ..._params: unknown[]) =>
-      Promise.resolve(sql.includes('MIN(') ? [{ first }] : rows),
+      Promise.resolve(sql.includes('AS "first"') ? [{ first }] : rows),
     ),
   };
   const service = new DemandService({
@@ -164,6 +164,9 @@ describe('DemandService.series', () => {
     const [sql, ...params] = tenant.$queryRawUnsafe.mock.calls[0];
     expect(sql).toContain('t."counts_as_demand"');
     expect(sql).not.toContain('stock_request_id');
+    // Imported history (CU-17) counts before the product's first Pango movement.
+    expect(sql).toContain('"historical_movements"');
+    expect(sql).toContain('h."business_date" < s."day"');
     expect(params).toEqual([5, [1], 'America/Bogota']);
   });
 

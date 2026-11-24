@@ -108,6 +108,17 @@ Authentication and the invitation flow are described in [`auth.md`](../modules/a
 | `stock_request_lines` | Requested and reserved quantity per product. |
 | `stock_request_events` | Status history of a request: status, user, date and reason. |
 
+### Movement history import (CU-17)
+
+Imported history is isolated from inventory: nothing in these tables changes stock, costs, alerts or the catalog, and inventory never reads them.
+
+| Table | Purpose |
+|---|---|
+| `movement_imports` | A history import: source namespace, display file name (the file never reaches the API), status (`RECEIVING`, `VALIDATED`, `CONFIRMED`), revision, row counts by status, issue counts by code, uploader, and the confirmation's saved and skipped counts. |
+| `movement_import_rows` | Staging: one row per sent row, with the values as sent (`source`) and, once validated, its status (`PENDING`, `VALID`, `INVALID`, `DUPLICATE`), source key and leg, date, resolved warehouse, product and movement type (staging ids, not foreign keys), location and lot codes, quantities, the file's and the computed running balance, and its demand quantity. |
+| `movement_import_issues` | Problems of the last validation by row and field (`ERROR` or `WARNING`), the first 10,000 per import. |
+| `historical_movements` | The confirmed history: one line per source line, unique on (source namespace, external movement id, line, leg), with product, warehouse, movement type, business date, quantities, the file's balances, demand quantity and source references. Read only by demand, the forecast input and `GET /historical-movements`, and for each product and warehouse only before its first Pango movement there. |
+
 ### Forecasting and alerts
 
 | Table | Purpose |
@@ -148,7 +159,7 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
 
 - **`permissions`**: 30 permissions.
   - `ORGANIZATION` scope (applies to the whole organization once any assignment grants it): `role.read`, `role.manage`, `department.manage`, `settings.manage`, `warehouse.manage`, `catalog.read`, `product.manage`, `category.manage`, `attribute.manage`, `supplier.manage`, `movement_type.manage`, `forecast.run`, `notification.manage`.
-  - `WAREHOUSE` scope (applies on the assignment's warehouse): `user.read`, `user.manage` (moved here by `warehouse_scoped_roles`), `warehouse.read`, `location.manage`, `stock.read`, `replenishment.manage`, `movement.read`, `movement.create`, `movement.confirm`, `movement.receive`, `movement.void`, `stock_request.read`, `stock_request.create`, `stock_request.approve`, `forecast.read`, `alert.read`, `alert.resolve`.
+  - `WAREHOUSE` scope (applies on the assignment's warehouse): `user.read`, `user.manage` (moved here by `warehouse_scoped_roles`), `warehouse.read`, `location.manage`, `stock.read`, `replenishment.manage`, `movement.read`, `movement.create`, `movement.confirm`, `movement.receive`, `movement.void`, `movement.import` (`movement_imports` migration), `stock_request.read`, `stock_request.create`, `stock_request.approve`, `forecast.read`, `alert.read`, `alert.resolve`.
 - **`movement_types`** (`is_base = true`):
 
   | name | nature | counts_as_demand |
@@ -165,7 +176,8 @@ The `base_data` migration seeds every new tenant (it is a migration, not a seed,
 - **`units_of_measure`**: `EA` (Each); `catalog_fields` adds `KGM`, `GRM`, `LTR`, `MLT`, `MTR`, `BX`, `PK`.
 - **`roles`**: `Owner` (`is_system = true`) with every permission and every movement type.
 - **`roles`** (`warehouse_scoped_roles` migration): `Admin` (`is_system = false`), every permission except `role.manage` and `settings.manage`, and every movement type.
-- **`roles`** (`operator_role` migration): `Operator` (`is_system = false`), the MVP's second fixed role, with every base movement type and the catalog, warehouse, stock, movement, stock request, forecast and alert permissions; none of `user.*`, `role.*`, `department.manage`, `settings.manage`, `attribute.manage`, `movement_type.manage`, `notification.manage`.
+- **`roles`** (`operator_role` migration): `Operator` (`is_system = false`), the MVP's second fixed role, with every base movement type and the catalog, warehouse, stock, movement, stock request, forecast and alert permissions; none of `user.*`, `role.*`, `department.manage`, `settings.manage`, `attribute.manage`, `movement_type.manage`, `notification.manage`, `movement.import`.
+- **`movement.import`** (`movement_imports` migration): granted to Owner and Admin only.
 - **`settings`**: row `id = 1`, with replenishment drafts using "Purchase receipt"; the `stock_request_cycle` migration sets stock requests to be fulfilled with "Consumption issue".
 
 **Any future migration that adds a permission must also grant it to the Owner role.**

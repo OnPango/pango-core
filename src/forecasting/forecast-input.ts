@@ -1,4 +1,8 @@
 import { demandCondition } from '../demand/demand-rule.js';
+import {
+  beforeCutover,
+  pangoStartSql,
+} from '../movement-imports/history-sql.js';
 import type { Prisma } from '../generated/prisma/tenant/client.js';
 import type { ForecastSeriesInput } from './contract.js';
 
@@ -19,6 +23,8 @@ export interface SeriesKey {
  * - `stock`: closing stock of the days it changed, rebuilt from every movement
  *   (inbound, outbound, adjustments, and voided ones with their reversals).
  *   Negative stock (allowed by settings) is sent as 0, a stockout.
+ * Imported history (CU-17) adds, before each series' first Pango movement, its
+ * demand and the daily closing of the balance its file gave.
  * Series without demand and without stock changes are left out.
  */
 export async function buildSeries(
@@ -36,22 +42,53 @@ export async function buildSeries(
       FROM "${schema}"."movement_lines" l
       JOIN "${schema}"."movements" m ON m."id" = l."movement_id"`;
 
+  // Products of the series, for the cutover of their imported history.
+  const products = `l."product_id" IN (SELECT "product_id" FROM "${schema}"."product_warehouses" WHERE "id" = ANY($1::int[]))`;
+  const history = `
+       FROM "${schema}"."historical_movements" h
+       JOIN "${schema}"."product_warehouses" pw
+         ON pw."product_id" = h."product_id" AND pw."warehouse_id" = h."warehouse_id"
+       LEFT JOIN (${pangoStartSql(schema, '$2', products)}) s
+         ON s."product_id" = h."product_id" AND s."warehouse_id" = h."warehouse_id"
+      WHERE pw."id" = ANY($1::int[])
+        AND h."business_date" <= $3::date
+        AND ${beforeCutover}`;
+
   const demand = await tenant.$queryRawUnsafe<
     { pw: number; date: string; quantity: string }[]
   >(
-    `SELECT pw."id" AS "pw",
-            to_char((m."occurred_at" AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS "date",
-            SUM(l."quantity")::text AS "quantity"
-       ${lines}
-       JOIN "${schema}"."movement_types" t ON t."id" = m."movement_type_id"
-       JOIN "${schema}"."locations" loc ON loc."id" = l."origin_location_id"
-       JOIN "${schema}"."product_warehouses" pw
-         ON pw."product_id" = l."product_id" AND pw."warehouse_id" = loc."warehouse_id"
-      WHERE pw."id" = ANY($1::int[])
-        AND ${demandCondition()}
-        AND (m."occurred_at" AT TIME ZONE $2)::date <= $3::date
+    `SELECT "pw", to_char("day", 'YYYY-MM-DD') AS "date", SUM("quantity")::text AS "quantity"
+       FROM (
+         SELECT pw."id" AS "pw", (m."occurred_at" AT TIME ZONE $2)::date AS "day",
+                l."quantity"
+           ${lines}
+           JOIN "${schema}"."movement_types" t ON t."id" = m."movement_type_id"
+           JOIN "${schema}"."locations" loc ON loc."id" = l."origin_location_id"
+           JOIN "${schema}"."product_warehouses" pw
+             ON pw."product_id" = l."product_id" AND pw."warehouse_id" = loc."warehouse_id"
+          WHERE pw."id" = ANY($1::int[])
+            AND ${demandCondition()}
+            AND (m."occurred_at" AT TIME ZONE $2)::date <= $3::date
+         UNION ALL
+         SELECT pw."id", h."business_date", h."demand_quantity"
+           ${history} AND h."demand_quantity" > 0
+       ) d
       GROUP BY 1, 2
       ORDER BY 1, 2`,
+    ids,
+    input.timeZone,
+    input.historyEnd,
+  );
+
+  // The closing of each imported day: the last line of the day (latest import).
+  const historyStock = await tenant.$queryRawUnsafe<
+    { pw: number; date: string; closing: string }[]
+  >(
+    `SELECT DISTINCT ON (pw."id", h."business_date")
+            pw."id" AS "pw", to_char(h."business_date", 'YYYY-MM-DD') AS "date",
+            h."running_balance"::text AS "closing"
+       ${history} AND h."running_balance" IS NOT NULL
+      ORDER BY pw."id", h."business_date", h."import_id" DESC, h."source_row_number" DESC`,
     ids,
     input.timeZone,
     input.historyEnd,
@@ -95,7 +132,8 @@ export async function buildSeries(
     demandOf.set(row.pw, list);
   }
   const stockOf = new Map<number, ForecastSeriesInput['stock']>();
-  for (const row of stock) {
+  // Imported days all precede the series' first Pango movement, so they go first.
+  for (const row of [...historyStock, ...stock]) {
     const list = stockOf.get(row.pw) ?? [];
     list.push({
       date: row.date,
