@@ -46,4 +46,4 @@ Inbound movements, adjustments and transfers never count. The series is computed
 
 ## Not done yet
 
-- Importing movement history from an organization's previous system (T-01, CU-17) is proposed in the [kardex import design](cu-17-kardex-import.md).
+- Importing movement history from an organization's previous system (T-01, CU-17) is proposed in the [kardex import design](../plans/cu-17-kardex-import.md).

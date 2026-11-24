@@ -45,7 +45,7 @@ It returns only public data. It reveals whether a subdomain exists, as the login
 
 ### Owner sign-up — `POST /auth/signup` (main domain)
 
-Creates the account, the organization and its tenant schema in one transaction (see *Provisioning* in [`database.md`](database.md)). If the email already has an account, the request must carry that account's password and the account becomes the owner of the new organization.
+Creates the account, the organization and its tenant schema in one transaction (see *Provisioning* in [`database.md`](../architecture/database.md)). If the email already has an account, the request must carry that account's password and the account becomes the owner of the new organization.
 
 - **New account**: no session. A confirmation email is sent and the response is `201 { "verificationRequired": true, "email", "organization": { "subdomain" }, "verificationEmailSent" }`. Login answers `403 EMAIL_NOT_VERIFIED` until the email is confirmed.
 - **Existing, verified account**: returns a session for the new organization.

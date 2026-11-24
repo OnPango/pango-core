@@ -1,6 +1,6 @@
 # Pango — Departments and internal stock requests
 
-CU-08 (US-28, US-29) and CU-09 (US-30, US-31, US-32): a department (área) requests products from a warehouse, and the warehouse staff attend the request. Code: `src/departments/`, `src/stock-requests/`. Data model: `departments`, `stock_requests`, `stock_request_lines` and `stock_request_events` in [`database.md`](database.md).
+CU-08 (US-28, US-29) and CU-09 (US-30, US-31, US-32): a department (área) requests products from a warehouse, and the warehouse staff attend the request. Code: `src/departments/`, `src/stock-requests/`. Data model: `departments`, `stock_requests`, `stock_request_lines` and `stock_request_events` in [`database.md`](../architecture/database.md).
 
 ## Departments
 

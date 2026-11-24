@@ -10,11 +10,11 @@ Track proposals and tasks as `Proposed`, `Approved`, `Implemented`, or `Verified
 
 Every implementation task must specify its objective, scope, technical constraints, dependencies, acceptance criteria, validation requirements, and explicit out-of-scope items.
 
-Claude provides an implementation report and validation evidence. Codex inspects the Git diff against each acceptance criterion, identifies bugs and architectural violations, reviews test execution evidence, cites files and lines, and recommends approval or rework. Report passing tests only with execution evidence. Follow the [architecture workflow](docs/architecture-workflow.md).
+Claude provides an implementation report and validation evidence. Codex inspects the Git diff against each acceptance criterion, identifies bugs and architectural violations, reviews test execution evidence, cites files and lines, and recommends approval or rework. Report passing tests only with execution evidence. Follow the [architecture workflow](docs/project/architecture-workflow.md).
 
 ## Project Structure and Style
 
-NestJS domains under `src/` group controllers, services, DTOs, and unit tests. Update Swagger decorators and the corresponding guide in `docs/` whenever API behavior changes. Read `docs/database.md` before changing the shared schema in `prisma/control/` or the per-organization schema in `prisma/tenant/`. Add migrations and preserve applied ones.
+NestJS domains under `src/` group controllers, services, DTOs, and unit tests. Update Swagger decorators and the corresponding guide in `docs/modules/` whenever API behavior changes. Read `docs/architecture/database.md` before changing the shared schema in `prisma/control/` or the per-organization schema in `prisma/tenant/`. Add migrations and preserve applied ones.
 
 Write code and documentation in English. Reserve comments for complex, non-obvious logic. Use two spaces, single quotes, trailing commas, and `.js` extensions for relative imports. Use PascalCase classes and kebab-case filenames such as `stock-requests.service.ts`.
 

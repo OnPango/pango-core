@@ -2,7 +2,7 @@
 
 ## Architecture decision
 
-**Design status** · Approved, as recorded in [Project Context](project-context.md#decisions-taken-with-the-user).
+**Design status** · Approved, as recorded in [Project Context](../project/project-context.md#decisions-taken-with-the-user).
 
 A warehouse needs enough available stock to cover demand while it waits for replenishment. CU-10 already stores a weekly forecast and its calibrated interval for the entire horizon. CU-12 already evaluates alerts against the effective reorder point of each product in each warehouse.
 
@@ -30,7 +30,7 @@ The build and type-aware lint passed. The unit suite passed all 245 tests, and t
 
 **Technical constraints.** Reuse tenant isolation, warehouse permissions, decimal quantity semantics and the existing product row locks. For a forecast transaction, lock affected products in ascending ID order before deciding which rows currently use forecasting. Read the method, lead time and current forecast under that lock. Persist forecast results, effective thresholds and alert changes atomically. Keep the external service call outside the transaction.
 
-**Dependencies.** CU-10 supplies current forecasts and their run horizons. CU-12 supplies available stock, alert severity and resolution rules. The design and its approval are recorded in [Project Context](project-context.md). The discarded implementation is a historical reference.
+**Dependencies.** CU-10 supplies current forecasts and their run horizons. CU-12 supplies available stock, alert severity and resolution rules. The design and its approval are recorded in [Project Context](../project/project-context.md). The discarded implementation is a historical reference.
 
 **Acceptance criteria**
 

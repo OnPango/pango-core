@@ -17,11 +17,11 @@ Classify each source event by the inventory position it represents. Upload time 
 
 Define the cutoff as the first operational day for the coverage being reconciled. A split within one day requires reliable source ordering or manual reconciliation. Check both ends of a transfer and all warehouses sharing a product's average cost before choosing a posting treatment. A product's existence in the catalog alone is compatible with an initial load.
 
-**Ledger and reporting.** Persist the posting treatment and the opening it is reconciled against. Historical entries are visible in movement history. For a reconciled boundary, use historical changes before the opening and start the operational running balance at the opening quantity. This prevents a cumulative sum from counting the opening twice. Apply the same boundary to stock reconstruction, forecasts and reconciliation reports; count each eligible sale or internal consumption once in demand. For transfers, use dispatch date and dispatched quantity at origin, receipt date and actual quantity at destination. Preserve existing forecast runs; subsequent requested runs use the reconciled history. Evaluate current alerts against the resulting available stock once when the operational import commits. See [movements](movements.md), [demand](demand.md) and [forecasting](forecasting.md).
+**Ledger and reporting.** Persist the posting treatment and the opening it is reconciled against. Historical entries are visible in movement history. For a reconciled boundary, use historical changes before the opening and start the operational running balance at the opening quantity. This prevents a cumulative sum from counting the opening twice. Apply the same boundary to stock reconstruction, forecasts and reconciliation reports; count each eligible sale or internal consumption once in demand. For transfers, use dispatch date and dispatched quantity at origin, receipt date and actual quantity at destination. Preserve existing forecast runs; subsequent requested runs use the reconciled history. Evaluate current alerts against the resulting available stock once when the operational import commits. See [movements](../modules/movements.md), [demand](../modules/demand.md) and [forecasting](../modules/forecasting.md).
 
 ## Template v1
 
-Companies map their source records to the [CSV example](kardex-v1.csv). CSV and XLSX use the same columns. One row represents a source product line in one warehouse on its actual local business date. Preserve codes as text and quantities in the product's stock unit at up to four decimal places.
+Companies map their source records to the [standard Pango kardex template for importing inventory movement history](../templates/pango-standard-kardex-movement-history-import-v1.csv). CSV and XLSX use the same columns. One row represents a source product line in one warehouse on its actual local business date. Preserve codes as text and quantities in the product's stock unit at up to four decimal places.
 
 | Columns | Contract |
 | --- | --- |
@@ -47,6 +47,41 @@ Preview and confirmation resolve submitted codes against the current tenant cata
 2. Same key and equivalent normalized business fields means skip. Same key with a different SKU, date, warehouse, quantity, lot or cost means conflict. Include other material fields such as movement type and location in the comparison. Audit any subsequent correction through the movement correction process.
 3. A native entry or a second source may lack the original key. Show candidate Pango movement and line IDs using the document reference, warehouse, SKU, lot, date, type and quantities. Allow an authorized user to link a matching line with zero stock impact or confirm a distinct event. Preserve the link for future reimports. Identical quantities for the same SKU on the same day can represent two genuine sales. In overlapping coverage require explicit disposition even if the search has no candidates.
 4. Preview counts and reasons for new, historical, matched, skipped, ambiguous, conflicting and invalid lines. Show current and projected quantities and valuation, and differences from opening or count records. Confirm only a reconciled batch. Recheck permissions, source keys and balances under the normal product locks and commit movements, mappings, stock changes and audit together. A retry or competing confirmation must have one effect. Re-preview when live inputs have changed.
+
+## Proposed importer contract
+
+| API operation | Result |
+| --- | --- |
+| `POST /movement-imports` | Upload the v1 CSV or XLSX and choose a persistent source system. For an active warehouse, identify the period and any Pango opening that covers it. Create a tenant-scoped preview with a batch ID and revision. Only staging data is written. |
+| `GET /movement-imports/:id` | Read the summary, status and paginated row report. Include file row, external key, field, issue code, explanation, permitted candidate lines and projected stock effects. Distinguish counts of input rows, posted movements, posted lines, linked lines and skipped duplicates. |
+| `PATCH /movement-imports/:id/resolutions` | Submit a reviewed match or a decision that a row represents a distinct operation, with supporting reference and expected revision. Recompute the preview. Correct invalid source data in a new upload. |
+| `POST /movement-imports/:id/confirm` | Accept the reviewed revision. Return the committed report and Pango movement references. An unresolved conflict or stale preview returns a conflict response. Repeating confirmation of a committed batch returns its original receipt. |
+
+Use the existing warehouse and movement-type authorization at preview, review and commit, including receiving permission for transfer receipts. Propose a separate import permission for administrators, seeded for Owner and Admin, for the additional ability to post history. Apply tenant and warehouse checks to reports and matches as well as writes.
+
+### Row validation and dates
+
+- Accept the documented headers and preserve text identifiers, including leading zeros. Map CSV and XLSX values to the same typed representation before comparing them. Reject ambiguous dates, unknown movement codes, incompatible units, invalid decimal precision and a quantity on the wrong side. Resolve the SKU, location, lot and movement type under the tenant's rules. Show errors such as `UNKNOWN_SKU`, `UNIT_MISMATCH` or `BALANCE_MISMATCH` with the source row and column.
+- Group ordinary rows by source movement ID into one header and multiple lines. Check shared date, type, warehouse and document reference for consistency. Group transfer legs separately by dispatch and receipt date before linking them to the same movement. A receipt needs an identifiable dispatch and received quantity within the amount sent. A dispatch alone must identify its destination through a reviewed mapping or remain pending.
+- Keep the source calendar date and the organization's time zone in staging and provenance. For date-only v1 input, materialize the beginning of that local business day in `occurred_at` (and `received_at` for a receipt), preserving date-only precision in the import record. Reject a local date that cannot be represented. `created_at` and batch confirmation time record the actual posting time. If chronology within a day affects valuation or a cutoff, require a reliable source sequence before posting. A spreadsheet row number or a movement's line number cannot establish order across documents.
+- Classify identical repeated keys in one file once. Reject conflicting versions of the same key even on different rows of that file. For a source document already posted, a newly encountered line or a changed group of lines requires review before creating another movement or changing a posted document. A repeated document reference alone is never proof of a match.
+
+### Persistence and confirmation
+
+Use a tenant migration for batch records, staged rows and a durable source-to-movement-line mapping. Store the canonical business fields compared, posting treatment, opening reference where applicable, and reviewer decisions. Keep mappings after staging cleanup. Native movement rows from before the migration remain readable without provenance. Expose imported provenance in movement history, which currently labels movements without a stock request as manual.
+
+During confirmation, lock the batch and affected product rows in a deterministic order. Recheck duplicate keys, complete document groups, live permissions, catalog mappings and inventory/valuation assumptions using that transaction. An already committed identical identity has zero incremental effect. If a changed input alters the reviewed effects, return the batch for review. Roll back the whole confirmation on failure. Keep ordinary movement creation and stock-request fulfillment on their existing date and side-effect behavior.
+
+### Delivery order and evidence
+
+| Step | Deliverable | Observable check |
+| --- | --- | --- |
+| 1 | Parser, staged preview and report | CSV and XLSX produce the same normalized rows. An invalid SKU is identified by row and field. Previewing leaves movements, balances and costs intact. |
+| 2 | Source mapping and duplicate review | Reordered exports skip the same lines. Reused keys with changed quantities block posting. Two real sales of the same SKU can both be retained. Linking a native sale preserves its original ID. |
+| 3 | Atomic confirmation and original dates | A multi-line sale produces one header. Its original local day appears in movement history and demand, even when uploaded months later. Concurrent confirmations apply stock once. An injected failure rolls back postings and mappings. |
+| 4 | Live cutover and downstream reconciliation | Verify the opening-balance example below by location and lot, including the existing sale. Verify a Monday transfer of 10 received on Wednesday as 8 against both warehouses' daily stock. Update forecast and dashboard stock reads for actual receipt dates, quantities and cutover treatment before enabling that posting path. |
+
+Use the checked-in CSV as a first fixture. Add a repeated export, a changed duplicate, a multi-line document with a leading-zero SKU, and a sale near a local week boundary. Run posting, retry, stale-preview and rollback checks against PostgreSQL. Include the actual row report and before/after balances in the implementation evidence.
 
 ## Implementation task for Claude
 

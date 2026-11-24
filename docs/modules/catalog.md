@@ -1,6 +1,6 @@
 # Pango — Product catalog
 
-CU-03 (US-08, US-09, US-10, US-11): the organization's products, their families (categories) and units of measure. Code: `src/catalog/`. Data model: `products`, `categories` and `units_of_measure` in [`database.md`](database.md).
+CU-03 (US-08, US-09, US-10, US-11): the organization's products, their families (categories) and units of measure. Code: `src/catalog/`. Data model: `products`, `categories` and `units_of_measure` in [`database.md`](../architecture/database.md).
 
 ## Endpoints
 
