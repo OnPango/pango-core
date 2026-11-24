@@ -1,13 +1,16 @@
 import { ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module.js';
 import { setupSwagger } from './swagger/swagger.js';
 import { isAllowedOrigin } from './tenancy/origins.js';
 import { TENANT_HEADER } from './tenancy/subdomain.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // History imports send their rows as JSON batches (up to 2,000 rows, < 1 MB).
+  app.useBodyParser('json', { limit: '1mb' });
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({

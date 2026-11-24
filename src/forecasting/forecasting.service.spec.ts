@@ -144,7 +144,13 @@ describe('buildSeries', () => {
                 { pw: 9, date: '2026-10-01', closing: '12' },
                 { pw: 9, date: '2026-10-05', closing: '-2' },
               ]
-            : [{ pw: 9, date: '2026-10-05', quantity: '14' }],
+            : sql.includes('"running_balance"')
+              ? // Imported history: its closings precede the first Pango movement.
+                [
+                  { pw: 9, date: '2025-03-01', closing: '30' },
+                  { pw: 9, date: '2025-03-08', closing: '-1' },
+                ]
+              : [{ pw: 9, date: '2026-10-05', quantity: '14' }],
         ),
       ),
     };
@@ -165,6 +171,8 @@ describe('buildSeries', () => {
         demand: [{ date: '2026-10-05', quantity: 14 }],
         // Negative stock is sent as a stockout.
         stock: [
+          { date: '2025-03-01', closing_stock: 30 },
+          { date: '2025-03-08', closing_stock: 0 },
           { date: '2026-10-01', closing_stock: 12 },
           { date: '2026-10-05', closing_stock: 0 },
         ],
@@ -177,6 +185,12 @@ describe('buildSeries', () => {
       'America/Bogota',
       '2026-11-15',
     );
+    // Imported demand and stock count only before each series' first Pango movement.
+    const demandSql = tenant.$queryRawUnsafe.mock.calls.find(([sql]) =>
+      sql.includes('t."counts_as_demand"'),
+    )![0];
+    expect(demandSql).toContain('"historical_movements"');
+    expect(demandSql).toContain('h."business_date" < s."day"');
   });
 });
 

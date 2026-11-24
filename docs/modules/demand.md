@@ -44,6 +44,4 @@ Response:
 
 Inbound movements, adjustments and transfers never count. The series is computed on each request from `movements` and `movement_lines` (no stored table).
 
-## Not done yet
-
-- Importing movement history from an organization's previous system (T-01, CU-17) is proposed in the [kardex import design](../plans/cu-17-kardex-import.md).
+Imported history ([`movement-imports.md`](movement-imports.md), CU-17) adds the sales and internal consumption of a company's history before Pango: for each product and warehouse, only the days before its first Pango movement there, so nothing is counted twice.

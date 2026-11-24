@@ -24,6 +24,7 @@ CU-10 (US-38, US-39): forecast runs through the external forecasting service (Py
 - `history_end`: the last complete Sunday in `settings.time_zone` (on Monday, the day before). Nothing after it is sent.
 - `demand`: per local day, the gross demand of the day (the shared demand rule of [`demand.md`](demand.md): sales and internal consumption, with or without a stock request). Only days with demand; quantities are never negative.
 - `stock`: per local day, the closing stock of the days it changed, rebuilt from every confirmed (and voided) movement of the product in the warehouse, so it starts with the first stock that arrived. Negative stock (allowed by `settings.allow_negative_stock`) is sent as 0, a stockout.
+- Imported history ([`movement-imports.md`](movement-imports.md), CU-17) adds, before the series' first Pango movement, its demand and the daily closing of the balance its file gave (the last line of each day). A series whose file never set a balance sends its demand without stock.
 - `warehouses`: every warehouse of the run with `holds_stock` (`warehouses.holds_stock`, set by the administrator). The service declines the series of a warehouse that holds no stock.
 - `metadata` per series, for traceability: `sku`, `category`, `stock_unit`, `warehouse_code`, `warehouse_type`, `lead_time_days`.
 - `contract_version` is `1.2`; `frequency` is always `WEEKLY` (the only one the service supports), whatever `settings.forecast_granularity` says. No `calendar` is sent yet, and no series is `history_only`.
@@ -53,4 +54,3 @@ In the same transaction, the products of the run are locked (in id order, as mov
 - Calendar of closed dates (`calendar.closed_dates`, `closed_dates_by_warehouse`): there is no table for them yet.
 - Forecast evaluation (`POST /v1/forecast-evaluations`) after the horizon has elapsed, and its metrics.
 - Scheduled runs; runs are started by hand.
-- History imported from the organization's previous system (T-01, CU-17).

@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
 import { InvitationsModule } from './invitations/invitations.module.js';
 import { MailModule } from './mail/mail.module.js';
+import { MovementImportsModule } from './movement-imports/movement-imports.module.js';
 import { MovementsModule } from './movements/movements.module.js';
 import { ReplenishmentModule } from './replenishment/replenishment.module.js';
 import { StockRequestsModule } from './stock-requests/stock-requests.module.js';
@@ -38,6 +39,7 @@ import { WarehousesModule } from './warehouses/warehouses.module.js';
     SearchModule,
     DashboardModule,
     MovementsModule,
+    MovementImportsModule,
     ReplenishmentModule,
     DepartmentsModule,
     StockRequestsModule,

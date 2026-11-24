@@ -34,6 +34,9 @@ The `dev` branch currently provides:
   resolved automatically.
 - **Demand history** per product and period, and **demand forecasting** runs
   through the Python forecasting service.
+- **Movement history import**: a company's history before Pango, mapped in
+  the browser and sent in batches, feeds demand and the forecast without ever
+  touching current inventory.
 - **Departments and internal stock requests**, with reservations, a status
   history and fulfilment through an outbound movement that feeds demand.
 - **OpenAPI documentation** through Swagger UI.
