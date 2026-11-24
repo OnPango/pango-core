@@ -171,6 +171,8 @@ describe('ProductsService.get', () => {
     expect(detail.totalOnHand).toBe(15);
     expect(detail.warehouses.map((w) => w.onHand)).toEqual([15, 0]);
     expect(detail.hasMovements).toBe(false);
+    // The cached weighted average cost, as a number.
+    expect(detail.averageCost).toBe(0);
   });
 
   it('returns 404 for an unknown product', async () => {

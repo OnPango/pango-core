@@ -52,6 +52,7 @@ function toDto(product: ProductWithRefs): ProductFields {
     weightKg: toNumber(product.weightKg),
     volumeL: toNumber(product.volumeL),
     tracksLots: product.tracksLots,
+    averageCost: product.averageCost.toNumber(),
     isActive: product.isActive,
     createdAt: product.createdAt,
     updatedAt: product.updatedAt,

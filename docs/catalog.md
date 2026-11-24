@@ -41,6 +41,7 @@ Required: `sku`, `name`, `categoryId`, `stockUnitId` (the unit every quantity of
 - The code (`sku`) is unique in the organization, ignoring case (`409 SKU_TAKEN`).
 - Once the product has movements, its code (`409 SKU_LOCKED`) and lot tracking (`409 TRACKS_LOTS_LOCKED`, also once it has lots) cannot change.
 - Products and categories are never deleted, only deactivated.
+- Every product response carries `averageCost`: the weighted average cost of one stock unit, across every warehouse. It is read-only here: inbound movements with a `unitCost` set it ([`movements.md`](movements.md)). It is 0 until the first one, and stock is valued with it (on hand × average cost).
 - A product needs an active category (`400 CATEGORY_INVALID`) and an existing stock unit (`400 STOCK_UNIT_INVALID`).
 - Category names are unique among siblings, ignoring case (`409 CATEGORY_NAME_TAKEN`). A category cannot move under itself or a descendant (`400 CATEGORY_CYCLE`), needs an active parent to be active (`400 CATEGORY_PARENT_INVALID`) and cannot be deactivated while it has active subcategories (`409 CATEGORY_HAS_ACTIVE_CHILDREN`). Products of an inactive category keep it.
 

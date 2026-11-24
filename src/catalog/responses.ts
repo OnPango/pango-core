@@ -96,6 +96,14 @@ export class ProductDto {
   @ApiProperty({ example: false })
   tracksLots: boolean;
 
+  @ApiProperty({
+    example: 1250.5,
+    description:
+      'Weighted average cost of one stock unit, across every warehouse. Set by ' +
+      'inbound movements with a `unitCost`; 0 until the first one',
+  })
+  averageCost: number;
+
   @ApiProperty({ example: true })
   isActive: boolean;
 
