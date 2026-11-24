@@ -1,6 +1,6 @@
 # Pango — Demand forecasting
 
-CU-10 (US-38, US-39): forecast runs through the external forecasting service (Python / FastAPI), following its contract v1.2 (`POST /v1/forecasts`; the contract lives in the `pango-prediction` repository, `docs/contract-v1.md`). Core reads the database, applies the demand rules and stores the results; the service builds the weekly series, profiles them and forecasts. Code: `src/forecasting/`. Data model: `forecast_runs`, `forecasts` and `forecast_periods` in [`database.md`](database.md).
+CU-10 (US-38, US-39): forecast runs through the external forecasting service (Python / FastAPI), following its contract v1.2 (`POST /v1/forecasts`; the contract lives in the `pango-prediction` repository, `docs/contract-v1.md`). Core reads the database, applies the demand rules and stores the results; the service builds the weekly series, profiles them and forecasts. Code: `src/forecasting/`. Data model: `forecast_runs`, `forecasts` and `forecast_periods` in [`database.md`](../architecture/database.md).
 
 ## Endpoints
 

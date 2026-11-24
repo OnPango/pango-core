@@ -93,10 +93,12 @@ the application.
 ```text
 .
 ├── docs/
-│   ├── auth.md                 # Authentication and invitation flows
-│   ├── catalog.md              # Product catalog API
-│   ├── database.md             # Database design and migration workflow
-│   └── warehouses.md           # Warehouse API
+│   ├── README.md               # Documentation index
+│   ├── architecture/
+│   ├── modules/
+│   ├── plans/
+│   ├── project/
+│   └── templates/
 ├── prisma/
 │   ├── control/                # Public/control-plane schema and migrations
 │   ├── tenant/                 # Tenant schema and migrations
@@ -158,7 +160,7 @@ At minimum, configure:
 
 Important authentication defaults include 15-minute access tokens,
 30-day refresh tokens, 72-hour invitations and 24-hour email-verification
-links. See [`docs/auth.md`](docs/auth.md) for the complete configuration
+links. See [`docs/modules/auth.md`](docs/modules/auth.md) for the complete configuration
 reference.
 
 ## Local development
@@ -278,7 +280,7 @@ data model.
 Tenant provisioning creates the schema, applies all tenant migrations, creates
 the organization and adds the owner in a single workflow. New schema changes
 must be added as migrations; already-applied migrations must not be edited.
-Read [`docs/database.md`](docs/database.md) before changing either schema.
+Read [`docs/architecture/database.md`](docs/architecture/database.md) before changing either schema.
 
 ## Testing and quality checks
 
@@ -295,14 +297,8 @@ Generated Prisma clients under `src/generated/` are not committed. Run
 
 ## Documentation
 
-- [`docs/auth.md`](docs/auth.md): sessions, cookies, CSRF, email verification,
-  invitations and user administration.
-- [`docs/catalog.md`](docs/catalog.md): product and category behavior,
-  validation rules and catalog endpoints.
-- [`docs/warehouses.md`](docs/warehouses.md): warehouse types, permissions
-  and default locations.
-- [`docs/database.md`](docs/database.md): schemas, naming conventions,
-  migrations, provisioning and data-model rules.
+The [documentation index](docs/README.md) links to module guides, database
+design, project decisions, implementation plans and templates.
 
 ## Development workflow
 

@@ -1,5 +1,5 @@
 // Control plane (`public` schema): organizations, accounts, organization members and plans.
-// Shared by every organization. See docs/database.md.
+// Shared by every organization. See docs/architecture/database.md.
 
 generator client {
   provider            = "prisma-client"

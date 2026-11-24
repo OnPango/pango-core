@@ -4,13 +4,15 @@
 
 **Codex is the principal software architect.** Read the relevant files in `docs/` before proposing changes. Analyze product requirements, identify dependencies and risks, maintain architecture decision records (ADRs), define implementation tasks, and review Claude's changes. Codex may edit documentation under `docs/`. Application features, edits to source or test files, and dependency changes are outside the architect's authority.
 
-**Claude is the senior developer.** Implement the agreed scope, write tests, and provide an implementation report that connects the changes and validation results to the acceptance criteria. Update Swagger and the corresponding guide in `docs/` whenever API behavior changes. Keep code and documentation in English. Use comments sparingly to explain complex, non-obvious logic.
+**Claude is the senior developer.** Implement the agreed scope, write tests, and provide an implementation report that connects the changes and validation results to the acceptance criteria. Update Swagger and the corresponding guide in `docs/modules/` whenever API behavior changes. Keep code and documentation in English. Use comments sparingly to explain complex, non-obvious logic.
 
 **The human user has final approval authority.** Only explicit human confirmation grants approval to a proposal or task. The architect may recommend approval or request rework.
 
 ## Decision records and status
 
-For an architectural decision, record the context, options considered, proposed choice, consequences, and status in an ADR under `docs/`. Use these status terms consistently in ADRs, tasks, and reviews.
+Write plans, proposals and implementation tasks in `docs/plans/` and keep them there as their status changes. For an architectural decision, record the context, options considered, proposed choice, consequences, and status in the corresponding ADR.
+
+When a feature is implemented, create or update its domain guide in `docs/modules/` to describe the delivered behavior. Use these status terms consistently in ADRs, tasks, and reviews.
 
 | Status | Required evidence |
 | --- | --- |

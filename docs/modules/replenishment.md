@@ -1,6 +1,6 @@
 # Pango — Replenishment parameters and stock alerts
 
-US-16 (manual safety stock and reorder point), CU-11 (US-40, calculated from the forecast) and CU-12 / CU-12a (US-43, US-44): replenishment parameters per product and warehouse, and the alerts raised when available stock reaches the reorder point. Code: `src/replenishment/`. Data model: `product_warehouses` and `alerts` in [`database.md`](database.md).
+US-16 (manual safety stock and reorder point), CU-11 (US-40, calculated from the forecast) and CU-12 / CU-12a (US-43, US-44): replenishment parameters per product and warehouse, and the alerts raised when available stock reaches the reorder point. Code: `src/replenishment/`. Data model: `product_warehouses` and `alerts` in [`database.md`](../architecture/database.md).
 
 ## Endpoints
 

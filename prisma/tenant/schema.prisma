@@ -1,7 +1,7 @@
 // Per-organization schema template (`tenant_<slug>`). Every organization gets an
 // identical copy; customization is always rows, never new columns or tables.
 // The target schema is chosen with `?schema=` for migrations and with PrismaPg's
-// `schema` option at runtime. See docs/database.md.
+// `schema` option at runtime. See docs/architecture/database.md.
 //
 // Constraints Prisma cannot express (CHECK, partial indexes, NULLS NOT DISTINCT)
 // are hand-written SQL at the end of the `init` migration.

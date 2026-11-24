@@ -10,7 +10,7 @@ const D = (value: number) => new Prisma.Decimal(value);
 
 describe('computeReorderPoint', () => {
   it('matches the worked example of the design', () => {
-    // docs/cu-11-reorder-point.md: 28 days, 100 units, upper 120, 7 days of lead time.
+    // docs/plans/cu-11-reorder-point.md: 28 days, 100 units, upper 120, 7 days of lead time.
     const result = computeReorderPoint(
       { estimate: D(100), upper: D(120), horizonDays: 28 },
       7,

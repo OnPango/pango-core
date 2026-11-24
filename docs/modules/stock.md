@@ -1,6 +1,6 @@
 # Pango — Stock queries and lots
 
-Stock per warehouse (the inventory page "by warehouse"), stock of a product by location and lot, and the lots of a product. Code: `src/stock/`. Data model: `product_warehouses`, `stock_balances` and `lots` in [`database.md`](database.md). Stock per product across warehouses (US-15) stays in `GET /products/:id`.
+Stock per warehouse (the inventory page "by warehouse"), stock of a product by location and lot, and the lots of a product. Code: `src/stock/`. Data model: `product_warehouses`, `stock_balances` and `lots` in [`database.md`](../architecture/database.md). Stock per product across warehouses (US-15) stays in `GET /products/:id`.
 
 ## Endpoints
 

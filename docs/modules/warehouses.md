@@ -1,6 +1,6 @@
 # Pango — Warehouses
 
-CU-04 (US-17): the organization's warehouses, where stock is kept and movements are registered. Code: `src/warehouses/`. Data model: `warehouses` and `locations` in [`database.md`](database.md).
+CU-04 (US-17): the organization's warehouses, where stock is kept and movements are registered. Code: `src/warehouses/`. Data model: `warehouses` and `locations` in [`database.md`](../architecture/database.md).
 
 A warehouse is a storage warehouse (`WAREHOUSE`, bodega) or a point of sale (`STORE`, tienda). Each one is created with a **default location** (code `DEFAULT`, no level), so stock can be registered before any location hierarchy is defined (RN-002).
 

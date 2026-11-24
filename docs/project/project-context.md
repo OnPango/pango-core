@@ -1,10 +1,10 @@
 # Project Context
 
-Knowledge that is not visible in the code, the other guides or the Git history: decisions taken with the user, discarded work, findings and open questions. Read it after `CLAUDE.md`, `AGENTS.md`, `README.md` and [`database.md`](database.md). Last updated 2026-11-23.
+Knowledge that is not visible in the code, the other guides or the Git history: decisions taken with the user, discarded work, findings and open questions. Read it after `CLAUDE.md`, `AGENTS.md`, `README.md` and [`database.md`](../architecture/database.md). Last updated 2026-11-23.
 
 ## Sources
 
-- **Repo:** the domain guides in `docs/` (each ends with a "Not done yet" list), [`database.md`](database.md) for the data model, [`architecture-workflow.md`](architecture-workflow.md) for roles.
+- **Repo:** the domain guides in `docs/modules/` (each ends with a "Not done yet" list), [`database.md`](../architecture/database.md) for the data model, [`architecture-workflow.md`](architecture-workflow.md) for roles.
 - **Requirements (outside the repo, Spanish):** SRS (RF-*, RNF-*, business rules RN-001..016), use cases CU-01..CU-18 and user stories US-001..047. They used to live in `~/Documents/OnPango/Backend/Context/`; ask the user for their current location. The user implements one CU at a time against them. The repo deliberately deviates in places (configurable RBAC with warehouse-scoped roles, invitations, replenishment parameters per product and warehouse); flag new deviations instead of silently following either side.
 - **Forecasting service:** a separate Python service, owned by a colleague of the user, called from `src/forecasting/` (default `http://localhost:8000`). Forecast runs cannot be tested end to end without it running.
 
@@ -12,7 +12,7 @@ Knowledge that is not visible in the code, the other guides or the Git history: 
 
 Merged into `dev`, in order: auth, organizations and invitations (CU-01/02), warehouses (CU-04), roles with warehouse scope, catalog (CU-03), inventory movements (CU-05), replenishment parameters and alerts (CU-12/12a), departments and internal stock requests (CU-08/09), stock queries and lots, demand history (CU-10 A1), forecast runs (CU-10, PR #24).
 
-CU-11 (US-40) is implemented on the feature branch in commit `1c07bfc`. See the [implementation task and validation record](cu-11-reorder-point.md#implementation-task-for-claude).
+CU-11 (US-40) is implemented on the feature branch in commit `1c07bfc`. See the [implementation task and validation record](../plans/cu-11-reorder-point.md#implementation-task-for-claude).
 
 ## Decisions taken with the user
 

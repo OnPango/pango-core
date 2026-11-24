@@ -2,8 +2,8 @@
 
 Pango is a multi-tenant inventory management SaaS for SMEs, with demand forecasting. This document describes how the database is organized and the rules the application must enforce. Column-level detail lives in the Prisma schemas, which are the source of truth:
 
-- Control plane: [`prisma/control/schema.prisma`](../prisma/control/schema.prisma)
-- Tenant template: [`prisma/tenant/schema.prisma`](../prisma/tenant/schema.prisma)
+- Control plane: [`prisma/control/schema.prisma`](../../prisma/control/schema.prisma)
+- Tenant template: [`prisma/tenant/schema.prisma`](../../prisma/tenant/schema.prisma)
 
 Models carry `///` doc comments, which also show up in the generated clients.
 
@@ -55,7 +55,7 @@ Rules:
 - One pending invitation per (organization, email): partial unique index `organization_invitations_pending_key` (hand-written). Invitation emails are lowercase (`organization_invitations_email_lowercase_chk`). The control diff emits `DROP INDEX` for the partial index — remove that line from new migrations.
 - `organization_invitations.role_id` / `warehouse_id` are logical references into the tenant schema (no foreign key).
 
-Authentication and the invitation flow are described in [`auth.md`](auth.md).
+Authentication and the invitation flow are described in [`auth.md`](../modules/auth.md).
 
 ## Tenant template (`tenant_<slug>`)
 
@@ -179,7 +179,7 @@ These span several tables, so a `CHECK` cannot express them:
 - **Owner role:** cannot be edited or deleted, keeps every permission and always has at least one active holder.
 - **Movement lines by nature:** `INBOUND` → destination only; `OUTBOUND` → origin only; `TRANSFER` → origin and destination; `ADJUSTMENT` → destination (increase) or origin (decrease).
 - **Movement status:** `DRAFT → CONFIRMED` (updates `stock_balances`). Voiding a confirmed movement registers a reversing movement with `reversal_of_id` and marks the original `VOIDED`.
-  - Inter-warehouse transfer: `IN_TRANSIT` (dispatch: decreases the origin) `→ CONFIRMED` (receive: adds `received_quantity` at the destination, sets `received_by_id` and `received_at`; anything short is lost in transit), or straight to `CONFIRMED` when it is received at once. Details in [`movements.md`](movements.md).
+  - Inter-warehouse transfer: `IN_TRANSIT` (dispatch: decreases the origin) `→ CONFIRMED` (receive: adds `received_quantity` at the destination, sets `received_by_id` and `received_at`; anything short is lost in transit), or straight to `CONFIRMED` when it is received at once. Details in [`movements.md`](../modules/movements.md).
   - Within a single warehouse, confirmation is one step.
 - **Locations:** a location's parent belongs to the same warehouse, on the level with `depth` one lower. A location's level belongs to its warehouse. Every warehouse has exactly one default location (`warehouses.default_location_id`, created with it, no level, code `DEFAULT`); the code `DEFAULT` is reserved for it. The location of a `stock_balance` and a `default_location_id` must belong to the warehouse of their `product_warehouse`.
 - **Stock balances** exist only for products enabled in that warehouse (a `product_warehouse` row exists; registering a movement creates it when stock first arrives there). They cannot go negative unless `settings.allow_negative_stock`.
@@ -187,11 +187,11 @@ These span several tables, so a `CHECK` cannot express them:
 - **Products:** the SKU is unique case-insensitively (the application checks it; the index is case-sensitive). The SKU and `tracks_lots` cannot change once the product has movement lines (`tracks_lots` also not once it has lots). New products need an active category.
 - **Custom attributes:** the filled column in `attribute_values` must match `data_type` (`LIST` → `option_id`, and the option must belong to the same attribute). `is_required` attributes are enforced when creating products of their category. Block changes to `data_type` once the attribute has values.
 - **Reservations:**
-  - Stock request cycle: `PENDING → IN_PROGRESS → FULFILLED`, or `REJECTED` (with `rejection_reason`), or `CANCELLED` while `PENDING`; each change adds a `stock_request_events` row. Details in [`stock-requests.md`](stock-requests.md).
+  - Stock request cycle: `PENDING → IN_PROGRESS → FULFILLED`, or `REJECTED` (with `rejection_reason`), or `CANCELLED` while `PENDING`; each change adds a `stock_request_events` row. Details in [`stock-requests.md`](../modules/stock-requests.md).
   - Starting the attention (`IN_PROGRESS`) reserves the full requested quantity of every line (`reserved_quantity`), only if the warehouse's available stock covers it (no partial attention, RN-016).
   - The movement that fulfils it releases the reservation; rejecting releases it too.
   - When `reservation_expires_at` is set, the reservation is released automatically after it. `settings.reservation_expiry_days` proposes the default.
-- **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Reaching it opens a `BELOW_ROP` alert; while it stays below, each evaluation refreshes the open alert's severity, available stock, suggested quantity and reorder point (`updated_at`, `alert_updated_at` migration) instead of opening another; rising above it again resolves the alert (`RESOLVED`, `resolved_at`, and why in `resolution`: stock recovered, reorder point lowered or removed, or product or warehouse deactivated; `alert_resolution` migration). A reorder point of 0 means none. Planned: the alert also creates a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`, and confirming it resolves the alert. Details in [`replenishment.md`](replenishment.md).
+- **Replenishment:** the reorder point is compared against **available** stock (on hand − reserved), not on hand. Reaching it opens a `BELOW_ROP` alert; while it stays below, each evaluation refreshes the open alert's severity, available stock, suggested quantity and reorder point (`updated_at`, `alert_updated_at` migration) instead of opening another; rising above it again resolves the alert (`RESOLVED`, `resolved_at`, and why in `resolution`: stock recovered, reorder point lowered or removed, or product or warehouse deactivated; `alert_resolution` migration). A reorder point of 0 means none. Planned: the alert also creates a `DRAFT` movement of type `settings.replenishment_movement_type_id`, with the preferred supplier and `suggested_quantity`, and confirming it resolves the alert. Details in [`replenishment.md`](../modules/replenishment.md).
 - **Demand history** (forecast input): `CONFIRMED` outbound movements whose type has `counts_as_demand = true`: sales ("Sales issue", the demand of a point of sale) and internal consumption ("Consumption issue"), whether registered by hand or by fulfilling a stock request (US-013). A consumption that fulfils a request also carries its department (`stock_request_id`).
 
 ### Views (planned)
@@ -200,7 +200,7 @@ Derived values will be exposed as views in a later tenant migration:
 
 - `v_product_warehouse_stock`: per `product_warehouse` → `on_hand` (sum of `stock_balances.quantity`), `reserved` (reservations of active stock requests for that product and warehouse) and `available` (the difference).
 - `v_stock_ledger`: confirmed movements with a running balance per product and warehouse.
-- `v_demand_history`: confirmed demand outbound movements aggregated per `product_warehouse` and period (per `settings.forecast_granularity`). For now `GET /products/:id/demand` computes it with a query ([`demand.md`](demand.md)).
+- `v_demand_history`: confirmed demand outbound movements aggregated per `product_warehouse` and period (per `settings.forecast_granularity`). For now `GET /products/:id/demand` computes it with a query ([`demand.md`](../modules/demand.md)).
 - `v_in_transit`: lines of movements in `IN_TRANSIT`.
 - Fulfilled quantity per stock request line: sum of the lines of the confirmed movements that fulfil the request, per product.
 
