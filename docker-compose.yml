@@ -3,6 +3,8 @@ name: pango-core
 services:
   api:
     container_name: pango-api
+    env_file:
+      - .env
     build:
       context: .
       dockerfile: Dockerfile
