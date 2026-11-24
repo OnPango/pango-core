@@ -46,5 +46,4 @@ Inbound movements, adjustments and transfers never count. The series is computed
 
 ## Not done yet
 
-- The history imported from the organization's previous system (T-01, CU-17): there is no table for it yet.
-- The calculated reorder point (CU-11). The forecast (CU-10) sends the same demand, per day ([`forecasting.md`](forecasting.md)).
+- Importing movement history from an organization's previous system (T-01, CU-17) is proposed in the [kardex import design](cu-17-kardex-import.md).

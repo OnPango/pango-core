@@ -1,0 +1,5 @@
+external_movement_id,line_number,business_date,warehouse_code,sku,stock_unit,movement_type,quantity_in,quantity_out,balance_after,document_ref,location_code,lot_code,unit_cost
+OPEN-001,1,2026-08-01,MAIN,SKU-001,EA,OPENING_BALANCE,100,,100,,DEFAULT,,10
+PUR-001,1,2026-08-03,MAIN,SKU-001,EA,PURCHASE_RECEIPT,20,,120,PO-100,DEFAULT,,10
+SALE-001,1,2026-08-04,MAIN,SKU-001,EA,SALE,,12,108,INV-100,DEFAULT,,
+USE-001,1,2026-08-04,MAIN,SKU-001,EA,INTERNAL_CONSUMPTION,,3,105,REQ-100,DEFAULT,,
