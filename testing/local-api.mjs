@@ -14,7 +14,7 @@ async function call(tenant,token,path,body){
 function requireStatus(result,status,label){if(result.r.status!==status)throw Error(label+': HTTP '+result.r.status+' '+(result.data?.code||''));return result.data;}
 for(const tenant of tenants){
   const email=tenant+'@example.com';
-  const args=['exec','tsx','scripts/tenants.ts','create','--subdomain',tenant,'--legal-name',tenant,'--country','CO','--city','Bogota','--business-sector','RETAIL','--team-size','SIZE_1_5','--product-count','COUNT_1_100','--email',email,'--name','QA Owner','--password',password];
+  const args=['exec','tsx','scripts/tenants.ts','create','--subdomain',tenant,'--legal-name',tenant,'--country','CO','--city','Bogota','--business-sector','RETAIL','--team-size','SIZE_1_5','--product-count','COUNT_1_100','--email',email,'--name','QA-Owner','--password',password];
   // Windows pnpm.cmd requires shell; all arguments above are fixed or random alphanumeric.
   const p=spawnSync('pnpm',args,{stdio:'inherit',shell:process.platform==='win32'});
   if(p.status!==0)throw Error('Tenant provisioning failed');
