@@ -17,6 +17,12 @@
 | [Search](modules/search.md) | Cross-module search and access rules |
 | [Dashboard](modules/dashboard.md) | Inventory indicators and alerts |
 
+## In design
+
+| Guide | What it covers |
+| --- | --- |
+| [Inventory import](modules/inventary.md) | Opening of current stock from the standard template: approved rules, decisions and progress (not implemented yet) |
+
 ## Architecture and project
 
 - [Database architecture](architecture/database.md) covers tenant isolation, schema conventions, migrations and provisioning.

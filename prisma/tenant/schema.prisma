@@ -250,6 +250,7 @@ model User {
   notifications       Notification[]
   attendedAlerts      Alert[]             @relation("AlertAttendedBy")
   movementImports     MovementImport[]
+  inventoryImports    InventoryImport[]
 
   @@index([departmentId])
   @@map("users")
@@ -688,34 +689,37 @@ model MovementType {
 /// Stock movement header. Movements are never deleted: a confirmed movement is
 /// voided by a reversing movement that points to it through `reversalOfId`.
 model Movement {
-  id             Int            @id @default(autoincrement())
-  number         String         @unique @db.VarChar(20)
-  movementTypeId Int            @map("movement_type_id")
-  registeredById Int            @map("registered_by_id")
-  receivedById   Int?           @map("received_by_id")
-  stockRequestId Int?           @map("stock_request_id")
-  supplierId     Int?           @map("supplier_id")
-  departmentId   Int?           @map("department_id")
-  reversalOfId   Int?           @unique @map("reversal_of_id")
-  status         MovementStatus @default(DRAFT)
-  occurredAt     DateTime       @default(now()) @map("occurred_at") @db.Timestamptz
+  id                Int            @id @default(autoincrement())
+  number            String         @unique @db.VarChar(20)
+  movementTypeId    Int            @map("movement_type_id")
+  registeredById    Int            @map("registered_by_id")
+  receivedById      Int?           @map("received_by_id")
+  stockRequestId    Int?           @map("stock_request_id")
+  /// The inventory import whose confirmation created this opening movement.
+  inventoryImportId Int?           @map("inventory_import_id")
+  supplierId        Int?           @map("supplier_id")
+  departmentId      Int?           @map("department_id")
+  reversalOfId      Int?           @unique @map("reversal_of_id")
+  status            MovementStatus @default(DRAFT)
+  occurredAt        DateTime       @default(now()) @map("occurred_at") @db.Timestamptz
   /// Set when an inter-warehouse transfer is received.
-  receivedAt     DateTime?      @map("received_at") @db.Timestamptz
-  documentRef    String?        @map("document_ref") @db.VarChar(40)
-  notes          String?
-  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  receivedAt        DateTime?      @map("received_at") @db.Timestamptz
+  documentRef       String?        @map("document_ref") @db.VarChar(40)
+  notes             String?
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  movementType MovementType   @relation(fields: [movementTypeId], references: [id], onDelete: Restrict)
-  registeredBy User           @relation("MovementRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
-  receivedBy   User?          @relation("MovementReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
-  stockRequest StockRequest?  @relation(fields: [stockRequestId], references: [id], onDelete: Restrict)
-  supplier     Supplier?      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  department   Department?    @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  reversalOf   Movement?      @relation("MovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
-  reversedBy   Movement?      @relation("MovementReversal")
-  lines        MovementLine[]
-  alert        Alert?
+  movementType    MovementType     @relation(fields: [movementTypeId], references: [id], onDelete: Restrict)
+  registeredBy    User             @relation("MovementRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
+  receivedBy      User?            @relation("MovementReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  stockRequest    StockRequest?    @relation(fields: [stockRequestId], references: [id], onDelete: Restrict)
+  supplier        Supplier?        @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  department      Department?      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  reversalOf      Movement?        @relation("MovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversedBy      Movement?        @relation("MovementReversal")
+  lines           MovementLine[]
+  alert           Alert?
+  inventoryImport InventoryImport? @relation(fields: [inventoryImportId], references: [id], onDelete: Restrict)
 
   @@index([movementTypeId])
   @@index([registeredById])
@@ -725,6 +729,7 @@ model Movement {
   @@index([departmentId])
   @@index([status])
   @@index([occurredAt])
+  @@index([inventoryImportId])
   @@map("movements")
 }
 
@@ -1141,4 +1146,144 @@ model HistoricalMovement {
   @@index([importId])
   @@index([movementTypeId])
   @@map("historical_movements")
+}
+
+// ─── Inventory import ────────────────────────────────────────────────────────
+// An opening of current stock from the inventory template
+// (docs/modules/inventary.md). Rows are staged here while they are validated;
+// confirmation writes catalog, warehouses, lots and stock through the movement
+// engine in one transaction and then deletes the staged batches, rows and issues.
+
+enum InventoryImportStatus {
+  /// Batches are being received.
+  RECEIVING
+  /// Validated without errors: can be confirmed with its revision.
+  READY
+  /// Validated with errors: fix the file and start a new import.
+  INVALID
+  /// Confirmed: the stock is in Pango.
+  COMPLETED
+  CANCELLED
+  /// No activity for the configured hours while open.
+  EXPIRED
+
+  @@map("inventory_import_status")
+}
+
+enum InventoryImportRowStatus {
+  /// Not validated yet.
+  PENDING
+  VALID
+  /// At least one error.
+  INVALID
+  /// Identical to an earlier row: counted once.
+  DUPLICATE
+
+  @@map("inventory_import_row_status")
+}
+
+enum InventoryImportIssueSeverity {
+  ERROR
+  WARNING
+
+  @@map("inventory_import_issue_severity")
+}
+
+/// One inventory import. At most one is open (RECEIVING, READY, INVALID) per
+/// organization: partial unique index `inventory_imports_open_key`. Kept after it
+/// closes, with its summary and result.
+model InventoryImport {
+  id                    Int                   @id @default(autoincrement())
+  /// Chosen by the frontend once per file; a repeated creation returns the same import.
+  clientRequestId       String                @map("client_request_id") @db.Uuid
+  createdById           Int                   @map("created_by_id")
+  status                InventoryImportStatus @default(RECEIVING)
+  schemaVersion         Int                   @map("schema_version") @db.SmallInt
+  /// Name of the user's file and sheet, for display only; the file never reaches the API.
+  fileName              String                @map("file_name") @db.VarChar(255)
+  sheetName             String                @map("sheet_name") @db.VarChar(100)
+  /// Rows the file declares; validation needs every one of them.
+  totalRows             Int                   @map("total_rows")
+  receivedRows          Int                   @default(0) @map("received_rows")
+  /// Bumped by every validation; confirmation must name the last one.
+  revision              Int                   @default(0)
+  /// Source column and header of each field, for traceability.
+  mapping               Json
+  /// SHA-256 of the creation request, to tell a retry from a conflicting reuse.
+  requestFingerprint    String                @map("request_fingerprint") @db.Char(64)
+  /// Counts of the last validation.
+  summary               Json?
+  /// SHA-256 of the last validation's outcome; confirmation compares it.
+  validationFingerprint String?               @map("validation_fingerprint") @db.Char(64)
+  /// What the confirmation created.
+  result                Json?
+  /// Expiry counts from here.
+  lastActivityAt        DateTime              @default(now()) @map("last_activity_at") @db.Timestamptz
+  confirmedAt           DateTime?             @map("confirmed_at") @db.Timestamptz
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  createdBy User                   @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  batches   InventoryImportBatch[]
+  rows      InventoryImportRow[]
+  issues    InventoryImportIssue[]
+  movements Movement[]
+
+  @@unique([createdById, clientRequestId])
+  @@map("inventory_imports")
+}
+
+/// A batch received; a repeated batch is recognized by its number and hash.
+model InventoryImportBatch {
+  importId          Int      @map("import_id")
+  batchNumber       Int      @map("batch_number")
+  /// SHA-256 of the batch's rows.
+  payloadHash       String   @map("payload_hash") @db.Char(64)
+  rowCount          Int      @map("row_count")
+  /// Rows received by the import once this batch was stored, answered again on a retry.
+  receivedRowsAfter Int      @map("received_rows_after")
+  receivedAt        DateTime @default(now()) @map("received_at") @db.Timestamptz
+
+  import InventoryImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@id([importId, batchNumber])
+  @@map("inventory_import_batches")
+}
+
+/// A row as sent and, once validated, its status and preview.
+model InventoryImportRow {
+  importId    Int                      @map("import_id")
+  /// Row of the user's file, the header being row 1.
+  rowNumber   Int                      @map("row_number")
+  batchNumber Int                      @map("batch_number")
+  /// The cell values as sent, by field key.
+  values      Json
+  status      InventoryImportRowStatus @default(PENDING)
+  /// What the row resolves to (entities, quantity, cost), as shown in the preview.
+  preview     Json?
+  issueCount  Int                      @default(0) @map("issue_count")
+
+  import InventoryImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@id([importId, rowNumber])
+  @@index([importId, status])
+  @@map("inventory_import_rows")
+}
+
+/// A problem found by the last validation: on a row and field, or on the import.
+model InventoryImportIssue {
+  id        Int                          @id @default(autoincrement())
+  importId  Int                          @map("import_id")
+  rowNumber Int?                         @map("row_number")
+  field     String?                      @db.VarChar(40)
+  severity  InventoryImportIssueSeverity
+  code      String                       @db.VarChar(40)
+  message   String                       @db.VarChar(300)
+  /// The offending value, truncated.
+  value     String?                      @db.VarChar(200)
+
+  import InventoryImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@index([importId, rowNumber])
+  @@map("inventory_import_issues")
 }

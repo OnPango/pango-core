@@ -67,6 +67,29 @@ type WarehouseWithLocation = Prisma.WarehouseGetPayload<{
   include: typeof warehouseInclude;
 }>;
 
+/**
+ * Creates a warehouse and its default location (RN-002) inside the caller's
+ * transaction. `POST /warehouses` and the inventory import both use it, so a
+ * warehouse is always born the same way.
+ */
+export async function createWarehouseWithDefaultLocation(
+  tx: Tx,
+  data: Pick<
+    Prisma.WarehouseUncheckedCreateInput,
+    'code' | 'name' | 'type' | 'address' | 'holdsStock'
+  >,
+): Promise<WarehouseWithLocation> {
+  const created = await tx.warehouse.create({ data });
+  const location = await tx.location.create({
+    data: { warehouseId: created.id, code: DEFAULT_LOCATION_CODE },
+  });
+  return tx.warehouse.update({
+    where: { id: created.id },
+    data: { defaultLocationId: location.id },
+    include: warehouseInclude,
+  });
+}
+
 function toDto(warehouse: WarehouseWithLocation): WarehouseDto {
   return {
     id: warehouse.id,
@@ -139,25 +162,15 @@ export class WarehousesService {
     await this.assertUnique(tenant, dto.code, dto.name);
 
     try {
-      const warehouse = await tenant.$transaction(async (tx) => {
-        const created = await tx.warehouse.create({
-          data: {
-            code: dto.code,
-            name: dto.name,
-            type: dto.type,
-            address: dto.address || null,
-            holdsStock: dto.holdsStock ?? true,
-          },
-        });
-        const location = await tx.location.create({
-          data: { warehouseId: created.id, code: DEFAULT_LOCATION_CODE },
-        });
-        return tx.warehouse.update({
-          where: { id: created.id },
-          data: { defaultLocationId: location.id },
-          include: warehouseInclude,
-        });
-      });
+      const warehouse = await tenant.$transaction((tx) =>
+        createWarehouseWithDefaultLocation(tx, {
+          code: dto.code,
+          name: dto.name,
+          type: dto.type,
+          address: dto.address || null,
+          holdsStock: dto.holdsStock ?? true,
+        }),
+      );
       return toDto(warehouse);
     } catch (error) {
       if (isUniqueViolation(error)) throw warehouseErrors.codeTaken();

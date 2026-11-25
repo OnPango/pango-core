@@ -19,6 +19,8 @@ Also merged: the calculated reorder point (CU-11, PR #33). Implemented, not merg
 - **Roles (2026-11-24).** Claude is architect and senior developer; Codex only helps when the user asks (review or plan draft). Codex's plans and rules were removed on that date.
 - **Movement history import (CU-17), 2026-11-24.** Imported history exists only to feed the history and the forecast, from day one in Pango. It is completely isolated from inventory: it never changes stock, costs or alerts, and inventory never reads it. Current stock will come from a separate inventory import module and, after it, only from movements made in Pango, because the range and freshness of a company's history cannot be controlled. Users can see the imported history, shown apart from Pango's movements. Design and decisions: [CU-17 plan](../plans/cu-17-movement-history-import.md).
 
+- **Inventory import, 2026-11-24.** An opening of current stock, not a reconciliation; the API takes JSON only and the template is a static file in the frontend. It follows a stage-gated plan (INV-000..INV-017) where the user approves and accepts each stage. Rules, decisions and progress: [`inventary.md`](../modules/inventary.md).
+
 - **Calculated reorder point (CU-11), approved design:**
   - Formula, upper-band method. H = forecast horizon in days (weeks × 7), L = lead time in days:
     - expected = total estimate × L/H

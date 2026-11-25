@@ -95,6 +95,8 @@ export interface MovementRecord {
   stockRequestId?: number | null;
   documentRef?: string | null;
   notes?: string | null;
+  /** The inventory import whose confirmation records this opening movement. */
+  inventoryImportId?: number | null;
 }
 
 type Nature = 'INBOUND' | 'OUTBOUND' | 'TRANSFER' | 'ADJUSTMENT';
@@ -720,6 +722,7 @@ export class MovementsService {
         status: 'CONFIRMED',
         documentRef: input.documentRef ?? null,
         notes: input.notes ?? null,
+        inventoryImportId: input.inventoryImportId ?? null,
         lines: {
           create: resolved.map((line) => ({
             lineNumber: line.lineNumber,
