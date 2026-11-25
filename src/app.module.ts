@@ -4,6 +4,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
+import { InventoryImportsModule } from './inventory-imports/inventory-imports.module.js';
 import { InvitationsModule } from './invitations/invitations.module.js';
 import { MailModule } from './mail/mail.module.js';
 import { MovementImportsModule } from './movement-imports/movement-imports.module.js';
@@ -40,6 +41,7 @@ import { WarehousesModule } from './warehouses/warehouses.module.js';
     DashboardModule,
     MovementsModule,
     MovementImportsModule,
+    InventoryImportsModule,
     ReplenishmentModule,
     DepartmentsModule,
     StockRequestsModule,
