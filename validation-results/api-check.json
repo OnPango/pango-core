@@ -1,0 +1,182 @@
+{
+  "date": "2026-11-25T00:51:27.348Z",
+  "scope": "read-only short burst, not sustained load",
+  "checks": [
+    {
+      "path": "/auth/me",
+      "case": "authorized",
+      "status": 200,
+      "ms": 42.93110000000001,
+      "expected": [
+        200
+      ]
+    },
+    {
+      "path": "/products",
+      "case": "authorized",
+      "status": 200,
+      "ms": 26.928200000000004,
+      "expected": [
+        200
+      ]
+    },
+    {
+      "path": "/warehouses",
+      "case": "authorized",
+      "status": 200,
+      "ms": 24.240099999999998,
+      "expected": [
+        200
+      ]
+    },
+    {
+      "path": "/categories",
+      "case": "authorized",
+      "status": 200,
+      "ms": 20.81240000000001,
+      "expected": [
+        200
+      ]
+    },
+    {
+      "path": "/products",
+      "case": "missing token",
+      "status": 401,
+      "ms": 1.9422999999999888,
+      "expected": [
+        401,
+        403
+      ]
+    },
+    {
+      "path": "/products/1",
+      "case": "B own resource control",
+      "status": 200,
+      "ms": 25.3339,
+      "expected": [
+        200
+      ]
+    },
+    {
+      "path": "/products/1",
+      "case": "A token with B tenant",
+      "status": 403,
+      "ms": 13.14240000000001,
+      "expected": [
+        401,
+        403,
+        404
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "path": "/auth/me",
+      "concurrency": 1,
+      "requests": 5,
+      "p50_ms": 13.887500000000045,
+      "p95_ms": 16.760400000000004,
+      "error_rate": 0,
+      "requests_per_second": 4.481276956001209
+    },
+    {
+      "path": "/auth/me",
+      "concurrency": 5,
+      "requests": 25,
+      "p50_ms": 49.5462,
+      "p95_ms": 106.43900000000008,
+      "error_rate": 0,
+      "requests_per_second": 17.65330393940539
+    },
+    {
+      "path": "/auth/me",
+      "concurrency": 10,
+      "requests": 50,
+      "p50_ms": 35.05379999999968,
+      "p95_ms": 44.917599999999766,
+      "error_rate": 0,
+      "requests_per_second": 40.432952824205366
+    },
+    {
+      "path": "/products",
+      "concurrency": 1,
+      "requests": 5,
+      "p50_ms": 20.98790000000008,
+      "p95_ms": 21.51459999999952,
+      "error_rate": 0,
+      "requests_per_second": 4.330695362431564
+    },
+    {
+      "path": "/products",
+      "concurrency": 5,
+      "requests": 25,
+      "p50_ms": 27.555699999999888,
+      "p95_ms": 35.339600000000246,
+      "error_rate": 0,
+      "requests_per_second": 21.289409251253193
+    },
+    {
+      "path": "/products",
+      "concurrency": 10,
+      "requests": 50,
+      "p50_ms": 43.586999999999534,
+      "p95_ms": 137.92499999999927,
+      "error_rate": 0,
+      "requests_per_second": 35.76148832448203
+    },
+    {
+      "path": "/warehouses",
+      "concurrency": 1,
+      "requests": 5,
+      "p50_ms": 15.872400000000198,
+      "p95_ms": 19.007800000000316,
+      "error_rate": 0,
+      "requests_per_second": 4.39781664235847
+    },
+    {
+      "path": "/warehouses",
+      "concurrency": 5,
+      "requests": 25,
+      "p50_ms": 19.776700000000346,
+      "p95_ms": 22.009099999999307,
+      "error_rate": 0,
+      "requests_per_second": 21.468155640693496
+    },
+    {
+      "path": "/warehouses",
+      "concurrency": 10,
+      "requests": 50,
+      "p50_ms": 37.66569999999956,
+      "p95_ms": 43.41940000000068,
+      "error_rate": 0,
+      "requests_per_second": 40.980553170259654
+    },
+    {
+      "path": "/categories",
+      "concurrency": 1,
+      "requests": 5,
+      "p50_ms": 17.591699999999037,
+      "p95_ms": 36.343299999998635,
+      "error_rate": 0,
+      "requests_per_second": 4.364269135050738
+    },
+    {
+      "path": "/categories",
+      "concurrency": 5,
+      "requests": 25,
+      "p50_ms": 22.86159999999836,
+      "p95_ms": 29.411700000000565,
+      "error_rate": 0,
+      "requests_per_second": 21.28600687708311
+    },
+    {
+      "path": "/categories",
+      "concurrency": 10,
+      "requests": 50,
+      "p50_ms": 42.13510000000133,
+      "p95_ms": 54.23309999999947,
+      "error_rate": 0,
+      "requests_per_second": 39.28391704650941
+    }
+  ]
+}

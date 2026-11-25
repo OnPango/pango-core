@@ -1,0 +1,28 @@
+{
+  "commit": "bc81fafa3a49ed66b7e018dab750a5bd768c95d7",
+  "scope": "local PostgreSQL synthetic tenants, real HTTP API",
+  "checks": [
+    {
+      "case": "own product 0",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "case": "cross tenant token 0",
+      "status": 403,
+      "code": "TENANT_MISMATCH",
+      "passed": true
+    },
+    {
+      "case": "own product 1",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "case": "cross tenant token 1",
+      "status": 403,
+      "code": "TENANT_MISMATCH",
+      "passed": true
+    }
+  ]
+}
