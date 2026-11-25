@@ -2,7 +2,7 @@
 
 Imports a company's current stock (an opening) into Pango from one spreadsheet, so it starts with the inventory it has today. Planned code: `src/inventory-imports/`. This document is the source of truth for the module: approved rules, decisions, progress and, from INV-002, the frontend contract.
 
-**Status: in progress.** Implemented: the `inventory.import` permission (INV-004), the staging tables (INV-005) and the session routes `GET /inventory-imports/fields`, `POST /inventory-imports`, `GET /inventory-imports`, `GET /inventory-imports/:id` and `POST /inventory-imports/:id/cancel` (INV-007), `POST /inventory-imports/:id/rows` (INV-008) and `POST /inventory-imports/:id/validate` (INV-009). Not yet: the preview routes and confirmation; every rule about them is an approved requirement, not an available feature.
+**Status: in progress.** Implemented: the `inventory.import` permission (INV-004), the staging tables (INV-005) and the session routes `GET /inventory-imports/fields`, `POST /inventory-imports`, `GET /inventory-imports`, `GET /inventory-imports/:id` and `POST /inventory-imports/:id/cancel` (INV-007), `POST /inventory-imports/:id/rows` (INV-008), `POST /inventory-imports/:id/validate` (INV-009), `GET /inventory-imports/:id/rows` and `GET /inventory-imports/:id/issues` (INV-010), and `POST /inventory-imports/:id/confirm` (INV-011). Remaining stages harden and verify it (INV-012 to INV-017); every rule about them is an approved requirement, not an available feature.
 
 ## Overview
 
@@ -13,7 +13,7 @@ Imports a company's current stock (an opening) into Pango from one spreadsheet, 
 
 ## Handoff: read this first
 
-For anyone (person or agent) continuing the module. Updated 2026-11-24, with INV-009 awaiting acceptance.
+For anyone (person or agent) continuing the module. Updated 2026-11-25, with INV-014 awaiting acceptance.
 
 ### Where the work is
 
@@ -37,18 +37,13 @@ For anyone (person or agent) continuing the module. Updated 2026-11-24, with INV
   - `inventory-import-access.ts`: permission scope and the automatic role assignment for new warehouses.
   - `batch.ts`: batch shape; `parse.ts`: cell parsing; `lookups.ts`: the eight set-based reads of tenant data.
   - `validate.ts`: every row rule, pure, returning row previews, issues, summary and the **plan** (entities to create and stock lines).
-  - `inventory-imports.service.ts` and `.controller.ts`: fields, create, get, cancel, list, rows and validate.
+  - `confirm.ts`: the confirmation's locks and the writing of the plan (entities, then stock through `MovementsService.record()`).
+  - `inventory-imports.service.ts` and `.controller.ts`: fields, create, get, cancel, list, send rows, validate, preview rows, issues and confirm.
 - Tests: unit in `src/inventory-imports/*.spec.ts`; real PostgreSQL in `test/integration/*.int-spec.ts`.
 
 ### What is left
 
-- INV-010: `GET /inventory-imports/:id/rows` (preview pages from `inventory_import_rows.preview`) and `GET /inventory-imports/:id/issues` (the logic exists in `issuePage()`; only the route is missing).
-- INV-011, confirmation, the most delicate stage (see "Technical design → Confirmation transaction"):
-  - Reuse `runValidation()` and `outcomeFingerprint()` inside the transaction, under the locks in the documented order (organization advisory lock → import row → warehouses → categories → products `FOR UPDATE` in id order). A different fingerprint is `IMPORT_STALE`.
-  - Create what the plan returned by `validateRows()` lists. Record stock with `MovementsService.record()` as "Opening balance", in movements of at most 1,000 lines per warehouse.
-  - Make the two approved changes to other modules: warehouse creation callable inside a caller's transaction, and an optional `inventoryImportId` in `record()`. Show the owner the exact lines and keep their tests passing.
-  - Assign a non-Owner creator with `assignCreatorToWarehouse()`; delete the staged data on completion.
-- INV-012 to INV-017: failure recovery, security, full integration and regression tests (including failures injected in the middle of a confirmation), performance, final contract and delivery.
+- INV-015 to INV-017: performance against Supabase (with approved thresholds), the final frontend contract checked against the running API, and delivery. Security (INV-013) and testing (INV-014) are done; see their open, pre-existing findings. Failures injected in the middle of a confirmation (INV-011) and recovery (INV-012) are already covered.
 
 ### Known traps
 
@@ -57,6 +52,7 @@ For anyone (person or agent) continuing the module. Updated 2026-11-24, with INV
 - `tsx` cannot boot Nest (no decorator metadata): for application-level checks, run `pnpm build` and use `dist/`.
 - Do not use `pkill` on this machine: it matched a system process. Start test servers with a `timeout`.
 - Prettier rewrites files; prefer the editor tool over scripted text replacements.
+- Every import transaction bounds its lock waits (`boundWaits`); keep it in any new transaction, or a blocked statement holds its connection past Prisma's timeout.
 - `pnpm exec tsc --noEmit` has three errors from before this module (`test/app.e2e-spec.ts:4`, `src/movement-imports/movement-imports.service.spec.ts:429` and `:432`); they are not regressions.
 
 ### Checks
@@ -67,7 +63,7 @@ docker compose -f docker-compose.test.yml up -d
 env -u DATABASE_URL -u DIRECT_URL pnpm test:int
 ```
 
-At handoff: 361 unit and 33 integration tests passed.
+At handoff: 390 unit and 69 integration tests passed.
 
 ## Scope
 
@@ -248,6 +244,15 @@ Rationale: Keeps confirmations short and the engine untouched; larger inventorie
 Approval evidence: Owner, 2026-11-24 ("A por ahora, deja C como mejora futura").
 Implementation and test references: none yet.
 
+### ADR-INV-014 — Bounded waits, and retryable failures answer 503
+
+Status: Approved (implemented in INV-012)
+Context: Prisma's transaction timeout does not cancel a statement that is waiting for a lock: a measured confirmation kept its connection waiting 20 s after its 0.7 s limit. Timeouts, deadlocks and lost connections surfaced as generic 500 errors.
+Decision: Every import transaction sets `SET LOCAL lock_timeout` and `statement_timeout` to its own time limit, so PostgreSQL cancels the wait and rolls back. A failure that only needs a retry (Prisma `P2028`, `P2034`; SQLSTATE `57014`, `55P03`, `40P01`, `40001`, `57P01`–`57P03`, `08000`, `08003`, `08006`) answers `503 IMPORT_BUSY`: nothing was saved, try again.
+Rationale: Every import operation is safe to repeat (creation and batches by their identity, validation by revision, confirmation by its stored result), so "try again" is always correct; the connection is freed at once instead of waiting for the lock.
+Approval evidence: Owner, 2026-11-25 ("acepto INV-011 y autorizo INV-012"; the proposal named the new 503).
+Implementation and test references: `src/inventory-imports/inventory-import-errors.ts` (`isRetryable`), `inventory-imports.service.ts` (`boundWaits`, `retryable`); `inventory-import-errors.spec.ts`, `test/integration/inventory-import-recovery.int-spec.ts`.
+
 ## API contract (INV-002)
 
 Approved design, not implemented. Status codes and error codes are final unless a later stage changes them with approval; examples will be checked against the running API in INV-016.
@@ -335,6 +340,7 @@ Formats: decimals use `.` as separator and no thousands separator (`1250.5`); da
     "maxRowsPerImport": 5000,
     "maxRequestBytes": 1048576,
     "maxValueChars": 2000,
+    "maxRowChars": 4096,
     "expiryHours": 24
   },
   "fields": [
@@ -423,7 +429,7 @@ Response (201):
 ```
 
 - `batchNumber` ≥ 1, chosen by the frontend; batches may arrive in any order.
-- `rows`: 1 to `maxRowsPerBatch`, and the whole body within `maxRequestBytes`. `rowNumber` is the row of the file (the header is row 1), so it is ≥ 2 and unique in the import. `values` holds only dictionary keys, each a string up to `maxValueChars` or null.
+- `rows`: 1 to `maxRowsPerBatch`, and the whole body within `maxRequestBytes`. `rowNumber` is the row of the file (the header is row 1), so it is ≥ 2 and unique in the import. `values` holds only dictionary keys, each a string up to `maxValueChars` or null, and all the values of a row add up to at most `maxRowChars` (4,096) characters (INV-013).
 - A structurally wrong batch (unknown key, repeated `rowNumber`, a value that is not a string or null) is rejected whole: 400 `ROWS_INVALID` with up to 20 `problems`. Wrong cell contents are not structural: they become issues at validation.
 - Retries: the same `batchNumber` with the same content answers the original result with `"replayed": true` and changes nothing. The same `batchNumber` with other content, or a `rowNumber` already received in another batch, answers 409 `BATCH_CONFLICT`. More rows than `totalRows` answers 409 `ROWS_EXCEED_TOTAL`.
 - New batches only in `RECEIVING` (otherwise 409 `IMPORT_NOT_RECEIVING`, or `IMPORT_CLOSED` once closed). A retried batch is answered while the import is open (`RECEIVING`, `READY`, `INVALID`), with the import's current `status`; once closed its staged batches are gone and it answers `IMPORT_CLOSED`.
@@ -530,6 +536,14 @@ Issue fields: `rowNumber` (null for an issue of the whole import), `field` (null
 
 Ids are null for entities that would be created; quantities and costs are strings with their exact digits.
 
+Implemented in INV-010:
+
+- The page is `{ revision, items, total, page, pageSize }`: `revision` is the validation the preview comes from (0 before any), so the frontend can tell an outdated preview and confirm the revision it showed.
+- `status` also accepts `PENDING`: before any validation every row is `PENDING`, with only its `sku` and every other field null.
+- Once the import closes (completed, cancelled, expired) its staged rows and issues are deleted, so both pages are empty; the import keeps its summary and result.
+- `GET /inventory-imports/:id/issues` answers the same shape as the issues of `validate`, with `revision` too; `severity` is `ERROR` or `WARNING`, `code` an issue code.
+- Both are readable by whoever may see the import (INV-BR-17), not only its creator.
+
 ### `POST /inventory-imports/:id/confirm`
 
 ```json
@@ -558,6 +572,14 @@ Only in `READY`, with the revision of the last validation. Everything is written
 - 409 `IMPORT_NOT_READY` in `RECEIVING` or `INVALID`; 409 `IMPORT_CLOSED` when cancelled or expired.
 - If the transaction fails, nothing is written and the import stays `READY`; the frontend may retry the confirmation.
 
+Implemented in INV-011 (`src/inventory-imports/confirm.ts`, `confirm()` in the service):
+
+- The response is the import (as `GET /inventory-imports/:id`) with `status: COMPLETED`, `confirmedAt` and `result` `{ stockRows, movements, created: { categories, products, warehouses, lots }, assignedWarehouses }`.
+- Stock is recorded with the movement engine (`MovementsService.record()`), so balances, product-warehouses, weighted average costs and alerts follow the same rules as any movement. Lines with a unit cost are recorded first, in every warehouse, then the lines without one: a line without cost takes the average the file's own costs produced, not 0 (INV-BR-01, INV-BR-13). Each warehouse gets at most two movements per 1,000 lines (one for lines with cost, one without), all "Opening balance", `documentRef = INV-IMP-<id>`, linked to the import and registered by its creator.
+- A unique violation while creating (someone created the same SKU, warehouse or category since the validation) answers `IMPORT_STALE`.
+- The logs record the import id, the outcome (error code or counts) and the duration; never row contents.
+- Measured locally (Docker PostgreSQL 17, 2026-11-25): 5,000 new rows (5,000 products, 50 categories, 1,250 lots) confirmed in 17.8 s, in 6 movements.
+
 ### Other routes
 
 - `POST /inventory-imports/:id/cancel`: no body; answers the import as `CANCELLED`. Repeating it answers the same.
@@ -575,6 +597,7 @@ Only in `READY`, with the revision of the last validation. Everything is written
 | 404 | `IMPORT_NOT_FOUND` |
 | 409 | `IDEMPOTENCY_CONFLICT`, `IMPORT_ACTIVE_EXISTS`, `BATCH_CONFLICT`, `ROWS_EXCEED_TOTAL`, `IMPORT_NOT_RECEIVING`, `IMPORT_INCOMPLETE`, `IMPORT_NOT_READY`, `IMPORT_STALE`, `IMPORT_CLOSED` |
 | 413 | Body over 1 MB; `IMPORT_LIMIT_EXCEEDED` |
+| 503 | `IMPORT_BUSY` (INV-012): time limit, conflict or lost connection; nothing was saved; repeat the same request |
 
 ## Standard template (INV-006)
 
@@ -635,6 +658,66 @@ v0.4 predates the approved rules. Before publishing it, the frontend's copy need
    - Dates `AAAA-MM-DD` (`DD/MM/AAAA` is also accepted).
 4. Remove the two dropdowns of v0.4 (Seguimiento: Cantidad / Lote; Tipo de almacén: Bodega / Tienda): the workbook has no data validation (ADR-INV-003). The `Instrucciones` sheet lists their accepted values instead: Seguimiento `Cantidad` or `Lote`; Tipo de almacén `Bodega` or `Tienda` (owner, 2026-11-24).
 
+### Recovery and retention (INV-012)
+
+No state is ever stored while work is in progress: validation and confirmation run inside one transaction each, so a crash, a lost connection or a timeout rolls everything back and leaves the import in the state it had.
+
+| State | If something fails | How to recover |
+|---|---|---|
+| `RECEIVING` | A batch is stored whole or not at all. | Resend the batch (same number and rows): stored once. A lost creation answer is recovered by repeating `POST /inventory-imports` with the same `clientRequestId`. |
+| `RECEIVING`, `READY`, `INVALID` while validating | Nothing changes: no revision, no issues. | Validate again. If only the answer was lost, `GET /inventory-imports/:id` shows the current `revision` and status. |
+| `READY` while confirming | Nothing is written; the import stays `READY` with the same revision. | Confirm again: it applies once. If the answer was lost after it applied, the repeat answers the stored result. |
+| `COMPLETED` | Final. | Its summary and result stay; staged data is gone. |
+| `CANCELLED`, `EXPIRED` | Final. | Start a new import. |
+
+- `503 IMPORT_BUSY` means the operation rolled back for time, contention or a lost connection; repeat the same request. `409 IMPORT_STALE` means the data changed: validate again first.
+- An open import idle for `expiryHours` (24 by default) becomes `EXPIRED` the next time anyone reads or writes an import of the organization, and its staged rows, batches and issues are deleted then. With no scheduler, until that happens the staged data of one idle import (at most `maxRowsPerImport` rows) stays in the database.
+- Kept forever: each import's row (creator, file and sheet names, mapping, `clientRequestId`, summary, result, dates), so creation stays idempotent and the origin of the stock stays auditable; and the opening movements, linked to the import. Never kept after closing: the staged cell values and issues.
+- Only the creator cancels an open import; anyone else waits for it to expire.
+
+## Security (INV-013)
+
+Verified on 2026-11-25. The module adds no dependency.
+
+| Check | How it holds | Evidence |
+|---|---|---|
+| Authentication, CSRF | Every route goes through the global `CsrfGuard` and `AuthGuard`; none is `@Public()`. | `inventory-imports.security.spec.ts`; HTTP against the built app: no session → 401 `UNAUTHENTICATED`; forged bearer → 401; session cookie from a foreign origin → 403 `CSRF_REJECTED` |
+| Authorization | Every route requires `inventory.import`; rows are checked per warehouse; only the creator changes an import; others see it only with the permission in every warehouse it touches. Revoked permissions make the confirmation `IMPORT_STALE`. | `inventory-import-access.*`, `inventory-import-sessions.int-spec.ts`, `inventory-import-validation.int-spec.ts`, `inventory-import-preview.int-spec.ts` |
+| Tenant isolation | A session only opens its organization's schema; ids of another organization's imports do not exist for it. | `inventory-import-isolation.int-spec.ts`: every route with another organization's import id → 404; nothing leaks into or blocks the other organization |
+| Disclosure | Warehouses the user may not import into answer `WAREHOUSE_FORBIDDEN` without saying whether they exist; invisible imports answer 404. `IMPORT_ACTIVE_EXISTS` says that some import is open, with its id only to its creator. | `validate.spec.ts`, `inventory-import-sessions.int-spec.ts` |
+| Request validation | `ValidationPipe` with `whitelist` and `forbidNonWhitelisted`: unknown fields, wrong types, text numbers, bad ids and oversized pages are refused; the mapping and the rows are checked key by key, so prototype keys (`__proto__`) are refused and nothing outside the dictionary is stored. Malformed JSON → 400. | `inventory-imports.security.spec.ts`, `fields.spec.ts`, `batch.spec.ts`; HTTP check |
+| SQL | Every value is a bound parameter. Only the schema name (checked by `assertTenantSchema`) and integer time limits are written into SQL text. | Review of every raw query of `src/inventory-imports/` |
+| Resources | 1 MB per request, 5,000 rows per batch and per import, 2,000 characters per value, 4,096 per row (so an import stages about 20 MB at most), one open import per organization, 10,000 stored issues, pages up to 100, bounded transactions (ADR-INV-014). | `batch.spec.ts`, `inventory-import-rows.int-spec.ts`, `inventory-import-recovery.int-spec.ts` |
+| Logs | Import id, outcome code, counts and duration only; never cell values, names or tokens. | Review of the module's logger calls |
+
+Findings:
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| S1 | A row could carry 21 values of 2,000 characters, so one import could stage about 210 MB. | Medium | Fixed: 4,096 characters per row (`ROWS_INVALID`). |
+| S2 | `body-parser` < 2.4.0 (through Express) has a denial of service with trailing bytes after a JSON body (`pnpm audit --prod`, high). It affects every JSON route of the API, not only this module. | High, pre-existing, global | Open: update Express/body-parser in a separate task for the whole API. |
+| S3 | The API has no request rate limiting. | Low, pre-existing, global | Open; the module bounds its own load (one open import, batch, row and byte limits). |
+| S4 | `pnpm audit --prod` also lists `source-map-js`, `effect` and `fast-uri` (Prisma's CLI and config tooling) and `qs` (`stringify` with `arrayFormat: comma`, not used). | Moderate to high, pre-existing | Open; not on the module's request path. |
+| S5 | Case-insensitive duplicates of SKUs, warehouses and categories created by hand at the very moment of a confirmation (see Technical design). | Low, pre-existing | Open; future improvement. |
+
+No critical or high finding of the module itself remains open. This review does not prove the absence of vulnerabilities.
+
+## Testing (INV-014)
+
+Measured on 2026-11-25 (local Docker PostgreSQL 17, Node 24).
+
+| Suite | Command | What it covers | Result |
+|---|---|---|---|
+| Unit | `pnpm test` | Every module of the repository; for this module: fields and mapping, batch shape and size, cell parsing, every validation rule, access rules, configuration, retryable errors, request validation, route permissions | 390 passed (38 files) |
+| Integration | `pnpm test:int` | Real PostgreSQL: migrations on new and existing tenants, permission, staging constraints, sessions, batches, validation against real stock and movements, preview, confirmation with 12 injected failures and races, recovery (timeouts, cut connections, restarts, lost answers), tenant isolation, and the whole flow over HTTP | 69 passed (11 files) |
+| HTTP end to end | part of `pnpm test:int` (`inventory-import-http.int-spec.ts`) | The real app with its guards and pipes: Pango's own routes create the warehouse, category, product and purchase; the import runs, is refused (`ALREADY_HAS_STOCK`), is fixed and confirmed; `/stock`, `/products`, `/movements` and `/products/:id/demand` then show the opening and no demand; Pango's error envelope; an Operator gets 403 on all 10 routes | 3 passed |
+| Existing e2e | `pnpm test:e2e` | The repository's own end-to-end check | 1 passed |
+
+- Regression: the warehouses, movements and stock-request unit suites pass without changes after the two approved changes to those modules (INV-011); over HTTP, `POST /warehouses` still creates the `DEFAULT` location and `POST /movements` still confirms a purchase.
+- Coverage of `src/inventory-imports/` with unit and integration tests together (v8): 97.11% lines, 88.21% branches, 99.03% functions, 96.89% statements. Targets approved by the owner on 2026-11-25 ("apruebo umbrales y metas"): at least 90% lines and 85% branches; both are met. Coverage supports, but does not replace, the targeted tests of the critical paths listed in this document.
+- Every stage also broke its own code on purpose (removing a lock, a check or a mapping) to prove the tests catch it, and reverted it; see the traceability evidence.
+- `pnpm exec tsc --noEmit` reports only the three errors that existed before this module.
+
 ## Frontend integration (INV-002)
 
 Flow: offer the static template for download → the user picks a workbook → read it locally → map columns → build rows → `POST /inventory-imports` → send batches → `POST …/validate` → show the summary, preview rows and issues → `POST …/confirm` with the revision → show the result.
@@ -649,6 +732,7 @@ Flow: offer the static template for download → the user picks a workbook → r
 - **Preview:** show `summary`, then rows and issues by page. With errors (`INVALID`), the user fixes the workbook and starts a new import (cancel the old one); warnings do not block.
 - **Confirmation:** send the `revision` shown. On 409 `IMPORT_STALE`, validate again and show the new preview before confirming.
 - **Open import:** on 409 `IMPORT_ACTIVE_EXISTS` with `importId`, offer to resume or cancel it; without it, someone else's import is open (it expires after 24 hours without activity).
+- **503 `IMPORT_BUSY`:** nothing was saved; repeat the same request (after a short wait). It is safe for every route.
 
 ## Permissions (INV-004)
 
@@ -699,10 +783,10 @@ A failure at any step rolls everything back; the import stays `READY` and the fa
 
 Lock order matches the existing code: movements lock only products; closing a warehouse updates the warehouse row and then locks its products. Neither takes them in the opposite order, so no deadlock cycle is introduced.
 
-### Changes to existing code (backward compatible)
+### Changes to existing code (backward compatible, implemented in INV-011)
 
-- `WarehousesService`: extract warehouse + `DEFAULT` location creation into a function that runs in a caller's transaction; `POST /warehouses` keeps its behavior.
-- `MovementsService.record()`: an optional `inventoryImportId` in its input; existing callers are unchanged.
+- `src/warehouses/warehouses.service.ts`: `createWarehouseWithDefaultLocation(tx, data)` creates the warehouse and its `DEFAULT` location in the caller's transaction; `POST /warehouses` calls it inside its own transaction, as before.
+- `src/movements/movements.service.ts`: `MovementRecord.inventoryImportId` (optional) is stored on the movement; existing callers pass nothing and get null, as before. The warehouses, movements and stock-request tests pass unchanged.
 - Products and categories are created by the import with its own set-based inserts, after the same checks (active category, existing unit, SKU free ignoring case), because the per-item services would issue thousands of queries.
 
 ### Case-insensitive duplicates
@@ -776,8 +860,6 @@ Accepted by the owner on 2026-11-24. Inspected `dev` at `bd52a65`.
 
 | Topic | Stage |
 |---|---|
-| Coverage targets for the new module (specification: ≥ 90% lines, ≥ 85% branches) | before INV-014 |
-| Performance acceptance thresholds against Supabase | INV-015 |
 
 ## Progress
 
@@ -792,13 +874,13 @@ Accepted by the owner on 2026-11-24. Inspected `dev` at `bd52a65`.
 | INV-006 | Template (static, frontend; see ADR-INV-003) | ACCEPTED | 2026-11-24 ("acepto inv-005, autorizo inv-006") | 2026-11-24 ("acepto INV-006 y autorizo INV-007") | n/a (documentation) | Standard template |
 | INV-007 | Import session management | ACCEPTED | 2026-11-24 ("acepto INV-006 y autorizo INV-007") | 2026-11-24 ("acepto INV-007 y autorizo INV-008") | Unit 20/20 (`src/inventory-imports/*.spec.ts` except access); integration 9/9 (`inventory-import-sessions.int-spec.ts`); OpenAPI lists the 5 routes | API contract (sessions), Configuration |
 | INV-008 | Batch reception and idempotency | ACCEPTED | 2026-11-24 ("acepto INV-007 y autorizo INV-008") | 2026-11-24 ("acepto INV-008 y autorizo INV-009") | Unit 4/4 (`batch.spec.ts`); integration 9/9 (`inventory-import-rows.int-spec.ts`); 413 checked over HTTP | API contract (rows) |
-| INV-009 | Validation and normalization | AWAITING_ACCEPTANCE | 2026-11-24 ("acepto INV-008 y autorizo INV-009") | — | Unit 40/40 (`parse.spec.ts`, `validate.spec.ts`); integration 5/5 (`inventory-import-validation.int-spec.ts`); 5,000 rows validated in 1.2 s locally | API contract (validate, row issues) |
-| INV-010 | Preview and revision control | PENDING | — | — | — | — |
-| INV-011 | Atomic confirmation | PENDING | — | — | — | — |
-| INV-012 | Lifecycle and failure recovery | PENDING | — | — | — | — |
-| INV-013 | Security hardening | PENDING | — | — | — | — |
-| INV-014 | Integration and regression testing | PENDING | — | — | — | — |
-| INV-015 | Performance and load testing | PENDING | — | — | — | — |
+| INV-009 | Validation and normalization | ACCEPTED | 2026-11-24 ("acepto INV-008 y autorizo INV-009") | 2026-11-25 ("acepto INV-009 y autorizo INV-010") | Unit 40/40 (`parse.spec.ts`, `validate.spec.ts`); integration 5/5 (`inventory-import-validation.int-spec.ts`); 5,000 rows validated in 1.2 s locally | API contract (validate, row issues) |
+| INV-010 | Preview and revision control | ACCEPTED | 2026-11-25 ("acepto INV-009 y autorizo INV-010") | 2026-11-25 ("acepto INV-010 y autorizo INV-011") | Integration 6/6 (`inventory-import-preview.int-spec.ts`); route metadata unit test; OpenAPI lists both routes | API contract (preview rows) |
+| INV-011 | Atomic confirmation | ACCEPTED | 2026-11-25 ("acepto INV-010 y autorizo INV-011") | 2026-11-25 ("acepto INV-011 y autorizo INV-012") | Integration 20/20 (`inventory-import-confirm.int-spec.ts`: full plan, idempotency, stale, states, assignment, alerts, 12 injected failures, concurrency); 5,000 rows confirmed in 17.8 s locally | API contract (confirm), Technical design |
+| INV-012 | Lifecycle and failure recovery | ACCEPTED | 2026-11-25 ("acepto INV-011 y autorizo INV-012") | 2026-11-25 ("acepto INV-012 y autorizo INV-013") | Unit 13/13 (`inventory-import-errors.spec.ts`); integration 4/4 (`inventory-import-recovery.int-spec.ts`); full suite 374 unit, 63 integration | Recovery and retention, ADR-INV-014 |
+| INV-013 | Security hardening | ACCEPTED | 2026-11-25 ("acepto INV-012 y autorizo INV-013") | 2026-11-25 ("acepto INV-013 y autorizo INV-014") | Unit 15/15 (`inventory-imports.security.spec.ts`) + row limit; integration 3/3 (`inventory-import-isolation.int-spec.ts`); HTTP checks; `pnpm audit --prod` | Security |
+| INV-014 | Integration and regression testing | ACCEPTED | 2026-11-25 ("acepto INV-013 y autorizo INV-014") | 2026-11-25 ("acepto INV-014 y autorizo INV-015") | Unit 390/390; integration 69/69 (HTTP end to end 3/3); e2e 1/1; module coverage 97.11% lines, 88.21% branches | Testing |
+| INV-015 | Performance and load testing | IN_PROGRESS | 2026-11-25 ("acepto INV-014 y autorizo INV-015") | — | — | — |
 | INV-016 | Final frontend integration contract | PENDING | — | — | — | — |
 | INV-017 | Production readiness and final acceptance | PENDING | — | — | — | — |
 
@@ -810,15 +892,15 @@ INV-006 was "dynamic XLSX template" in the specification; after ADR-INV-003 its 
 
 | Requirement ID | Approved requirement/decision | Acceptance criteria | Implementation paths | Test references | Evidence | Status |
 |---|---|---|---|---|---|---|
-| INV-FR-01 | One file, one session, batches | All batches of a file are staged under one import id; validation runs only once every declared row is received | — | — | — | Approved |
-| INV-FR-02 | Per-session row limit | A session declaring or receiving more rows than the limit is rejected before staging them | — | — | — | Approved |
-| INV-FR-03 | All or nothing | A failure injected after any intermediate write leaves products, categories, warehouses, locations, lots, product-warehouses, balances, movements, costs, alerts and the import status unchanged (real PostgreSQL) | — | — | — | Approved |
-| INV-FR-04 | Independent sessions | A failed session leaves an earlier confirmed session's changes intact | — | — | — | Approved |
+| INV-FR-01 | One file, one session, batches | All batches of a file are staged under one import id; validation runs only once every declared row is received | `src/inventory-imports/inventory-imports.service.ts` | `inventory-import-rows.int-spec.ts`; `test/integration/inventory-import-http.int-spec.ts` | 2026-11-25: batches of one file staged under one import id, in any order; over HTTP a file in two batches validates and confirms | Implemented, awaiting acceptance |
+| INV-FR-02 | Per-session row limit | A session declaring or receiving more rows than the limit is rejected before staging them | `src/inventory-imports/inventory-import-config.ts`; `inventory-imports.service.ts` (`create`) | `inventory-imports.service.spec.ts`; `inventory-import-sessions.int-spec.ts` | 2026-11-25: `totalRows` above the limit → 413 `IMPORT_LIMIT_EXCEEDED` before touching the database; default 5,000 | Implemented, awaiting acceptance |
+| INV-FR-03 | All or nothing | A failure injected after any intermediate write leaves products, categories, warehouses, locations, lots, product-warehouses, balances, movements, costs, alerts and the import status unchanged (real PostgreSQL) | `src/inventory-imports/confirm.ts`; `src/inventory-imports/inventory-imports.service.ts` (`confirm`) | `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: a failure injected by a database trigger during category, warehouse, default location, role assignment, product, lot, product-warehouse, balance, average cost, movement, alert or completion writes leaves every table and the import unchanged (12 cases), and the same import then confirms | Implemented, awaiting acceptance |
+| INV-FR-04 | Independent sessions | A failed session leaves an earlier confirmed session's changes intact | `src/inventory-imports/inventory-imports.service.ts` (`confirm`) | `test/integration/inventory-import-confirm.int-spec.ts`; `test/integration/inventory-import-http.int-spec.ts` | 2026-11-25: imports confirmed one after another keep each other's changes; a failed confirmation leaves earlier imports intact | Implemented, awaiting acceptance |
 | INV-FR-05 | Eligible identities only | A row whose identity has stock or any movement is a blocking error; re-importing a confirmed file changes nothing | `src/inventory-imports/validate.ts`; `src/inventory-imports/lookups.ts` | `src/inventory-imports/validate.spec.ts`; `test/integration/inventory-import-validation.int-spec.ts` | 2026-11-24: unit and integration tests passed; against real balances and movement lines, a new revision sees new stock; with the rule disabled 3 tests failed (check reverted) | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
-| INV-FR-06 | Never subtract, absent ≠ zero | Balances not named in the file are unchanged; no outbound or decreasing movement is created | — | — | — | Approved |
-| INV-FR-07 | Server validation, mandatory preview | Confirmation of a session that was never validated, or of another revision, is rejected | `src/inventory-imports/inventory-imports.service.ts` (`validate`) | `test/integration/inventory-import-validation.int-spec.ts` | 2026-11-24: validation stores status, revision and fingerprint and writes nothing definitive (products, warehouses and lots unchanged). Confirmation by revision comes in INV-011 | Validation implemented, awaiting acceptance |
-| INV-FR-08 | No artificial demand | After a confirmed import, `GET /products/:id/demand` and the forecast input's demand are unchanged | — | — | — | Approved |
-| INV-FR-09 | No workbook in the API | No endpoint accepts or returns a workbook | — | — | — | Approved |
+| INV-FR-06 | Never subtract, absent ≠ zero | Balances not named in the file are unchanged; no outbound or decreasing movement is created | `src/inventory-imports/confirm.ts`; `src/inventory-imports/inventory-imports.service.ts` (`confirm`); `src/inventory-imports/validate.ts` | `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: only inbound "Opening balance" lines are recorded; an earlier balance at another location stays as it was | Implemented, awaiting acceptance |
+| INV-FR-07 | Server validation, mandatory preview | Confirmation of a session that was never validated, or of another revision, is rejected | `src/inventory-imports/inventory-imports.service.ts` (`validate`, `confirm`) | `test/integration/inventory-import-validation.int-spec.ts`; `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: confirming another revision → `IMPORT_STALE`; INVALID or RECEIVING → `IMPORT_NOT_READY`; validation writes nothing definitive | Implemented, awaiting acceptance |
+| INV-FR-08 | No artificial demand | After a confirmed import, `GET /products/:id/demand` and the forecast input's demand are unchanged | `src/inventory-imports/confirm.ts`; `src/inventory-imports/inventory-imports.service.ts` (`confirm`) | `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: after a confirmed import the shared demand rule (`demandCondition`) finds no line; every opening movement has `countsAsDemand = false` | Implemented, awaiting acceptance |
+| INV-FR-09 | No workbook in the API | No endpoint accepts or returns a workbook | `src/inventory-imports/inventory-imports.controller.ts` | `inventory-imports.service.spec.ts` (route list); OpenAPI check | 2026-11-25: the 10 routes take and return JSON only; no upload or download route exists | Implemented, awaiting acceptance |
 | INV-BR-01 | Missing cost: warning | A row without cost is valid, warned `COST_MISSING`, and its line takes the current average cost | `src/inventory-imports/validate.ts` | `src/inventory-imports/validate.spec.ts` | 2026-11-24: unit and integration tests passed | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
 | INV-BR-02 | Existing product conflicts | Unit or tracking mismatch → error; descriptive mismatch → warning; the product row is unchanged | `src/inventory-imports/validate.ts` | `src/inventory-imports/validate.spec.ts` | 2026-11-24: unit and integration tests passed | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
 | INV-BR-03 | Inactive entities | Inactive product, warehouse or category → error | `src/inventory-imports/validate.ts` | `src/inventory-imports/validate.spec.ts` | 2026-11-24: unit and integration tests passed | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
@@ -831,34 +913,45 @@ INV-006 was "dynamic XLSX template" in the specification; after ADR-INV-003 its 
 | INV-BR-10 | Zero rows | Creates new entities named, no stock, no lot, no zero-quantity movement | `src/inventory-imports/validate.ts` | `src/inventory-imports/validate.spec.ts` | 2026-11-24: unit and integration tests passed | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
 | INV-BR-11 | Units and aliases | Listed aliases resolve; anything else → error; existing product's unit must match | `src/inventory-imports/validate.ts`; `src/inventory-imports/lookups.ts` | `src/inventory-imports/validate.spec.ts`; `test/integration/inventory-import-validation.int-spec.ts` | 2026-11-24: unit and integration tests passed; aliases from `fields.ts` | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
 | INV-BR-12 | Duplicate rows | Identical rows count once with a warning; same identity with different values → error on both; same SKU with different name, unit or tracking → error | `src/inventory-imports/validate.ts` | `src/inventory-imports/validate.spec.ts` | 2026-11-24: unit and integration tests passed | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
-| INV-BR-13 | Valuation | Average cost after confirmation equals the weighted average of existing stock (in transit included) and the imported quantities at their costs | — | — | — | Approved |
-| INV-BR-14 | Opening balance movements | Every stock line is an inbound "Opening balance" movement registered by the importer, at confirmation time, linked to the import | — | — | — | Approved |
-| INV-BR-15 | Authorization per warehouse | Owner: any warehouse; others: warehouses where they hold the permission plus warehouses the import creates; creator assigned to new warehouses; anything else → error without revealing whether the warehouse exists | `src/inventory-imports/inventory-import-access.ts` | `inventory-import-access.spec.ts`; `test/integration/inventory-import-access.int-spec.ts` (assignment) | 2026-11-24: unit 8/8, integration assignment 2/2 passed. Row-level use (the error without disclosure) comes with validation, INV-009 | Partially implemented |
+| INV-BR-13 | Valuation | Average cost after confirmation equals the weighted average of existing stock (in transit included) and the imported quantities at their costs | `src/inventory-imports/confirm.ts`; `src/inventory-imports/inventory-imports.service.ts` (`confirm`) | `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: 50 at 10 plus 30 at 20 → 13.75; a new product at 100 with a line without cost keeps 100 | Implemented, awaiting acceptance |
+| INV-BR-14 | Opening balance movements | Every stock line is an inbound "Opening balance" movement registered by the importer, at confirmation time, linked to the import | `src/inventory-imports/confirm.ts`; `src/inventory-imports/inventory-imports.service.ts` (`confirm`) | `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: every movement is a CONFIRMED "Opening balance" with `documentRef = INV-IMP-<id>`, `inventory_import_id` and the creator as `registered_by` | Implemented, awaiting acceptance |
+| INV-BR-15 | Authorization per warehouse | Owner: any warehouse; others: warehouses where they hold the permission plus warehouses the import creates; creator assigned to new warehouses; anything else → error without revealing whether the warehouse exists | `src/inventory-imports/inventory-import-access.ts`; `src/inventory-imports/validate.ts`; `src/inventory-imports/confirm.ts`; `src/inventory-imports/inventory-imports.service.ts` (`confirm`) | `inventory-import-access.spec.ts`; `test/integration/inventory-import-access.int-spec.ts`; `test/integration/inventory-import-validation.int-spec.ts`; `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: Owner anywhere; an Admin only in their warehouses (`WAREHOUSE_FORBIDDEN` elsewhere, without revealing it), and assigned with Admin on the warehouse their import created | Implemented, awaiting acceptance |
 | INV-BR-16 | Default grants | After migration, Owner and Admin hold `inventory.import`, Operator does not, custom roles are unchanged | `prisma/tenant/migrations/20261124100000_inventory_import_permission/migration.sql` | `test/integration/inventory-import-access.int-spec.ts` | 2026-11-24: new and existing tenant 2/2 passed; with the migration altered to also grant Operator, 3 tests failed (check reverted) | Implemented, awaiting acceptance |
 | INV-BR-17 | Session ownership and visibility | Only the creator changes a session; others see it only with the permission in every warehouse it touches, else 404 | `src/inventory-imports/inventory-imports.service.ts` (`canSee`, `lockOwn`) | `src/inventory-imports/inventory-imports.service.spec.ts`; `test/integration/inventory-import-sessions.int-spec.ts` | 2026-11-24: creator and Owner see; an Admin sees only imports whose warehouses are all theirs, else 404; non-creator cancel → 403 | Implemented for sessions, awaiting acceptance |
 
 | INV-API-01 | Values as text (ADR-INV-007) | A bad cell becomes a row issue with its row and source column; the batch is accepted | `src/inventory-imports/batch.ts`; `src/inventory-imports/parse.ts` | `batch.spec.ts`; `parse.spec.ts`; `test/integration/inventory-import-validation.int-spec.ts` | 2026-11-24: `"diez"` as quantity is accepted by the batch and reported as `INVALID_VALUE` on its row and source column | Implemented, awaiting acceptance |
 | INV-API-02 | Batches under 1 MB (ADR-INV-008) | Batches up to 5,000 rows within 1 MB are accepted; larger bodies answer 413; `main.ts` limit unchanged | `src/main.ts` (unchanged 1 MB); `src/inventory-imports/inventory-imports.service.ts` (`appendRows`) | `test/integration/inventory-import-rows.int-spec.ts`; HTTP check | 2026-11-24: 1.4 MB body → 413 (no `code`); more rows than the batch limit → 413 `IMPORT_LIMIT_EXCEEDED`; `main.ts` not changed | Implemented, awaiting acceptance |
-| INV-API-03 | Idempotent creation | Repeating `POST /inventory-imports` with the same `clientRequestId` returns the same import; a different body → 409 `IDEMPOTENCY_CONFLICT`; concurrent repeats create one import | `src/inventory-imports/inventory-imports.service.ts` | `test/integration/inventory-import-sessions.int-spec.ts` | 2026-11-24: replay, `IDEMPOTENCY_CONFLICT`, and 10 rounds of 4 simultaneous identical requests → one import each; without the race handling 2 tests failed (check reverted) | Implemented, awaiting acceptance |
+| INV-API-03 | Idempotent creation | Repeating `POST /inventory-imports` with the same `clientRequestId` returns the same import; a different body → 409 `IDEMPOTENCY_CONFLICT`; concurrent repeats create one import | `src/inventory-imports/inventory-imports.service.ts` (`create`) | `test/integration/inventory-import-sessions.int-spec.ts`; `test/integration/inventory-import-recovery.int-spec.ts` | 2026-11-25: replay, `IDEMPOTENCY_CONFLICT`, and 10 rounds of 4 simultaneous identical requests → one import each (5 consecutive runs). INV-012 found and fixed a race: a twin that committed between the two reads made the other answer `IMPORT_ACTIVE_EXISTS`; the open import is now checked first and recognized as the same request. A creation repeated after a restart answers the same import | Implemented, awaiting acceptance |
 | INV-API-04 | Idempotent batches | Same batch again → same response, `replayed: true`, counts unchanged; other content or a row already received → 409 `BATCH_CONFLICT` | `src/inventory-imports/inventory-imports.service.ts` (`appendRows`) | `test/integration/inventory-import-rows.int-spec.ts` | 2026-11-24: retry (rows reordered) → same answer, `replayed: true`, counts unchanged; other rows under the number or a received row → `BATCH_CONFLICT`, nothing stored; 5 identical batches at once → stored once; 6 different batches at once → 60 rows, counts 10..60. Without the hash check, the received-row check or the row lock, 1 test failed each (checks reverted) | Implemented, awaiting acceptance |
 | INV-API-05 | Completeness | Validation before every declared row arrived → 409 `IMPORT_INCOMPLETE`; more rows than declared → 409 `ROWS_EXCEED_TOTAL` | `src/inventory-imports/inventory-imports.service.ts` (`appendRows`, `validate`) | `test/integration/inventory-import-rows.int-spec.ts`; `test/integration/inventory-import-validation.int-spec.ts` | 2026-11-24: more rows than declared → `ROWS_EXCEED_TOTAL`; validating with rows missing → `IMPORT_INCOMPLETE` with both counts | Implemented, awaiting acceptance |
-| INV-API-06 | Lifecycle | Every state × action in the lifecycle table answers as documented | — | — | — | Approved |
+| INV-API-06 | Lifecycle | Every state × action in the lifecycle table answers as documented | `src/inventory-imports/inventory-imports.service.ts` | `test/integration/inventory-import-sessions.int-spec.ts`; `inventory-import-rows.int-spec.ts`; `inventory-import-validation.int-spec.ts`; `inventory-import-confirm.int-spec.ts`; `inventory-import-recovery.int-spec.ts` | 2026-11-25: every state × action of the lifecycle table answers as documented; a failure in any state leaves it unchanged and the same request succeeds when repeated | Implemented, awaiting acceptance |
 | INV-API-07 | One open import, 24 h expiry | A second open import → 409 `IMPORT_ACTIVE_EXISTS`; an import idle for 24 h is `EXPIRED` when read and no longer blocks a new one | `src/inventory-imports/inventory-imports.service.ts`; `inventory_imports_open_key` | `test/integration/inventory-import-sessions.int-spec.ts` | 2026-11-24: simultaneous creations by two users → one import and `IMPORT_ACTIVE_EXISTS` (with `importId` only for its creator); idle 25 h → `EXPIRED`, staged data deleted, a new import allowed; with expiry not deleting staged data 1 test failed (check reverted) | Implemented, awaiting acceptance |
-| INV-API-08 | Synchronous validation and confirmation | Both answer the final state in the same request; no state stays "processing" | — | — | — | Approved |
-| INV-API-09 | Idempotent confirmation, stale preview | Repeated confirmation returns the same result without new writes; a changed dependency → 409 `IMPORT_STALE` | — | — | — | Approved |
-| INV-API-10 | Bounded responses | Rows, issues and history are paginated (`pageSize` ≤ 100); at most 10,000 issues stored, all counted | — | — | — | Approved |
+| INV-API-08 | Synchronous validation and confirmation | Both answer the final state in the same request; no state stays "processing" | `src/inventory-imports/inventory-imports.service.ts` | `test/integration/inventory-import-validation.int-spec.ts`; `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: validate and confirm answer the final state in the request; no state other than RECEIVING, READY, INVALID, COMPLETED, CANCELLED, EXPIRED is ever stored | Implemented, awaiting acceptance |
+| INV-API-09 | Idempotent confirmation, stale preview | Repeated confirmation returns the same result without new writes; a changed dependency → 409 `IMPORT_STALE` | `src/inventory-imports/confirm.ts`; `src/inventory-imports/inventory-imports.service.ts` (`confirm`) | `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: a repeated confirmation and two simultaneous ones answer the same result with one set of movements; a change after validation → `IMPORT_STALE`, nothing written; without the fingerprint check 2 tests failed (check reverted) | Implemented, awaiting acceptance |
+| INV-API-10 | Bounded responses | Rows, issues and history are paginated (`pageSize` ≤ 100); at most 10,000 issues stored, all counted | `src/inventory-imports/inventory-imports.service.ts` (`rowPage`, `issuePage`, `list`); `inventory-import-config.ts` (`maxStoredIssues`) | `test/integration/inventory-import-preview.int-spec.ts`; `inventory-import-sessions.int-spec.ts` | 2026-11-25: rows and issues paged and filtered (status, severity, code), each page carries its revision; empty once closed; without the status filter, the severity filter or the visibility check, 1 test failed each (checks reverted) | Implemented, awaiting acceptance |
 | INV-API-11 | Field metadata | `GET /inventory-imports/fields` lists the 21 fields, units with aliases and the effective limits, from the same definitions the server validates with | `src/inventory-imports/fields.ts`; `src/inventory-imports/inventory-imports.service.ts` | `src/inventory-imports/fields.spec.ts`; `test/integration/inventory-import-sessions.int-spec.ts` | 2026-11-24: 21 fields, 8 units with aliases, default limits | Implemented, awaiting acceptance |
 
 | INV-BR-18 | First row defines a new product or warehouse | Later rows' differing values yield one `PRODUCT_VALUES_DIFFER` warning per product and are not applied; differing unit or tracking → `PRODUCT_INCONSISTENT` | `src/inventory-imports/validate.ts` | `src/inventory-imports/validate.spec.ts` | 2026-11-24: unit and integration tests passed | Validation implemented, awaiting acceptance (written on confirmation, INV-011) |
 | INV-TD-01 | Staging, one open import, retention (ADR-INV-010) | Two concurrent creations → one import, one 409; closing deletes batches, rows and issues and keeps the import row | `prisma/tenant/schema.prisma` (inventory import models); `prisma/tenant/migrations/20261124200000_inventory_imports/migration.sql` | `test/integration/inventory-import-staging.int-spec.ts` | 2026-11-24: 5/5 passed (one open import, client request id, counts, cascade of staged data, movements keep their import, existing tenant unchanged); without the open-import index and the counts check, 2 tests failed (check reverted). The 409 and the deletion on close are service behavior (INV-007, INV-012) | Database part implemented, awaiting acceptance |
-| INV-TD-02 | Confirmation under locks with re-validation (ADR-INV-011) | A sale, purchase or entity change committed between validation and confirmation → `IMPORT_STALE` and no write; a sale started during a confirmation waits and then applies on top of the opening | — | — | — | Approved |
-| INV-TD-03 | Backward-compatible extractions | Existing warehouse and movement tests pass unchanged; `POST /warehouses` and `POST /movements` answer as before | — | — | — | Approved |
+| INV-TD-02 | Confirmation under locks with re-validation (ADR-INV-011) | A sale, purchase or entity change committed between validation and confirmation → `IMPORT_STALE` and no write; a sale started during a confirmation waits and then applies on top of the opening | `src/inventory-imports/confirm.ts` (`lockDependencies`); `inventory-imports.service.ts` (`confirm`) | `test/integration/inventory-import-confirm.int-spec.ts` | 2026-11-25: a purchase holding the product makes the confirmation wait and then answer `IMPORT_STALE` (deterministic test); in 10 races with a purchase the balance always equals its movement lines and an opening is never loaded on a lot that had stock. Without the locks before re-validating, the deterministic test failed (check reverted) | Implemented, awaiting acceptance |
+| INV-TD-03 | Backward-compatible extractions | Existing warehouse and movement tests pass unchanged; `POST /warehouses` and `POST /movements` answer as before | `src/warehouses/warehouses.service.ts` (`createWarehouseWithDefaultLocation`); `src/movements/movements.service.ts` (`inventoryImportId`) | `src/warehouses/warehouses.service.spec.ts`; `src/movements/movements.service.spec.ts`; `src/stock-requests/stock-requests.service.spec.ts` | 2026-11-25: the three suites (45 tests) pass without changes | Implemented, awaiting acceptance |
 | INV-TD-04 | Configurable limits | Each variable changes the effective limit and `GET /inventory-imports/fields` | `src/inventory-imports/inventory-import-config.ts`; `.env.example` | `src/inventory-imports/inventory-import-config.spec.ts` | 2026-11-24: defaults, overrides and invalid values (start-up error) tested | Implemented, awaiting acceptance |
 | INV-TD-05 | Integration harness (ADR-INV-012) | Refuses a non-local database; provisions a tenant with every migration | `docker-compose.test.yml`, `vitest.config.integration.ts`, `test/integration/database.ts`, `test/integration/global-setup.ts` | `test/integration/provisioning.int-spec.ts` | 2026-11-24: `pnpm test:int` 1/1 passed; with `TEST_DATABASE_URL` on `db.example.com` the run stops with "Integration tests only run against a local database" | Implemented, awaiting acceptance |
+| INV-TD-07 | Bounded waits and retryable failures (ADR-INV-014) | A confirmation waiting for a lock longer than its limit answers 503 `IMPORT_BUSY` within the limit, writes nothing and confirms on retry; a connection cut mid-confirmation does the same; an import continues after a restart | `src/inventory-imports/inventory-import-errors.ts`; `src/inventory-imports/inventory-imports.service.ts` (`boundWaits`, `retryable`) | `src/inventory-imports/inventory-import-errors.spec.ts`; `test/integration/inventory-import-recovery.int-spec.ts` | 2026-11-25: lock held 3 s, limit 0.8 s → 503 in under 2.5 s; `pg_terminate_backend` on the waiting confirmation → 503, nothing written, the retry completes; a second server instance finishes an import the first started. Without the time limits or the 503 mapping, 1 and 2 tests failed (checks reverted) | Implemented, awaiting acceptance |
+| INV-SEC-01 | Tenant isolation | Another organization's import ids answer 404 on every route; nothing leaks into or blocks the other organization | `src/inventory-imports/inventory-imports.service.ts` (tenant client from the session) | `test/integration/inventory-import-isolation.int-spec.ts` | 2026-11-25: 3/3 passed | Implemented, awaiting acceptance |
+| INV-SEC-02 | Request validation | Unknown fields, wrong types and prototype keys refused before the handlers; malformed JSON → 400 | `src/inventory-imports/dto.ts`; `fields.ts`; `batch.ts` | `src/inventory-imports/inventory-imports.security.spec.ts`; `fields.spec.ts`; `batch.spec.ts` | 2026-11-25: 15/15 passed; HTTP: malformed JSON → 400 | Implemented, awaiting acceptance |
+| INV-SEC-03 | Staged size bound | A row over 4,096 characters → `ROWS_INVALID`; `maxRowChars` in `GET /fields` | `src/inventory-imports/batch.ts`; `inventory-import-config.ts` | `src/inventory-imports/batch.spec.ts`; `inventory-import-sessions.int-spec.ts` | 2026-11-25: passed; without the check its test failed (check reverted) | Implemented, awaiting acceptance |
+| INV-SEC-04 | Session and CSRF on every route | No `@Public()`; no session → 401; foreign origin with a session cookie → 403 | `src/inventory-imports/inventory-imports.controller.ts` (global guards) | `inventory-imports.security.spec.ts`; HTTP checks | 2026-11-25: passed | Implemented, awaiting acceptance |
+| INV-SEC-05 | Dependency review | No new dependency; audit findings recorded with severity | `package.json` (only `test:int` added) | `pnpm audit --prod` | 2026-11-25: 3 high, 3 moderate, 2 low, all pre-existing (S2, S4) | Reviewed, awaiting acceptance |
 | INV-TD-06 | Limit from measurements (ADR-INV-013) | Default 5,000 rows per import; benchmark recorded with its environment | — | — | Benchmark table (T11) | Approved |
 
 ## Change log
 
+- 2026-11-25 — INV-013 accepted. INV-014: HTTP end-to-end test through the real app, regression of the touched modules, test inventory and module coverage (97.11% lines, 88.21% branches).
+- 2026-11-25 — INV-012 accepted. INV-013: security review (authentication, CSRF, authorization, tenant isolation, disclosure, request validation, SQL, resources, logs, dependencies); 4,096-character row limit (S1); open pre-existing findings recorded; security, isolation and HTTP checks.
+- 2026-11-25 — INV-011 accepted. INV-012: bounded lock waits and statements in every import transaction, `503 IMPORT_BUSY` for retryable failures (ADR-INV-014), recovery and retention documented per state, a creation race fixed; recovery tests (lock timeout, cut connection, restart, lost answers).
+- 2026-11-25 — INV-010 accepted. INV-011: `POST /inventory-imports/:id/confirm` (re-validation under locks, `IMPORT_STALE`, plan written in one transaction through the movement engine, lines with cost first, creator assignment, staged data deleted); `createWarehouseWithDefaultLocation` and `MovementRecord.inventoryImportId` in existing modules; integration tests with injected failures and races; 5,000 rows measured.
+- 2026-11-25 — INV-009 accepted. INV-010: `GET /inventory-imports/:id/rows` and `GET /inventory-imports/:id/issues`, paged and filtered, carrying the validation `revision` (added to the contract); integration tests.
 - 2026-11-24 — Handoff section added for whoever continues the module.
 - 2026-11-24 — INV-008 accepted. INV-009: `POST /inventory-imports/:id/validate` with cell parsing, set-based lookups, every row rule, stored previews, issues and summary, revision and outcome fingerprint; unit and integration tests; 5,000 rows measured locally.
 - 2026-11-24 — INV-007 accepted. INV-008: `POST /inventory-imports/:id/rows` (structural batch check, idempotent batches by number and SHA-256, received-row and declared-total checks, one batch at a time per import), unit and integration tests; the 413 body for bodies over 1 MB recorded.
