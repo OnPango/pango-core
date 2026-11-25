@@ -1,0 +1,13 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: pango_test
+      POSTGRES_PASSWORD: pango_test
+      POSTGRES_DB: pango_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - qa_data:/var/lib/postgresql/data
+volumes:
+  qa_data:
