@@ -1,8 +1,8 @@
 # Pango — Inventory import
 
-Imports a company's current stock (an opening) into Pango from one spreadsheet, so it starts with the inventory it has today. Planned code: `src/inventory-imports/`. This document is the source of truth for the module: approved rules, decisions, progress and, from INV-002, the frontend contract.
+Imports a company's current stock (an opening) into Pango from one spreadsheet, so it starts with the inventory it has today. Code: `src/inventory-imports/`. This document is the source of truth for the module: approved rules, decisions, progress and, from INV-002, the frontend contract.
 
-**Status: in progress.** Implemented: the `inventory.import` permission (INV-004), the staging tables (INV-005) and the session routes `GET /inventory-imports/fields`, `POST /inventory-imports`, `GET /inventory-imports`, `GET /inventory-imports/:id` and `POST /inventory-imports/:id/cancel` (INV-007), `POST /inventory-imports/:id/rows` (INV-008), `POST /inventory-imports/:id/validate` (INV-009), `GET /inventory-imports/:id/rows` and `GET /inventory-imports/:id/issues` (INV-010), and `POST /inventory-imports/:id/confirm` (INV-011). Remaining stages harden and verify it (INV-012 to INV-017); every rule about them is an approved requirement, not an available feature.
+**Status: complete (INV-017 accepted on 2026-11-25).** Implemented: the `inventory.import` permission (INV-004), the staging tables (INV-005) and the session routes `GET /inventory-imports/fields`, `POST /inventory-imports`, `GET /inventory-imports`, `GET /inventory-imports/:id` and `POST /inventory-imports/:id/cancel` (INV-007), `POST /inventory-imports/:id/rows` (INV-008), `POST /inventory-imports/:id/validate` (INV-009), `GET /inventory-imports/:id/rows` and `GET /inventory-imports/:id/issues` (INV-010), and `POST /inventory-imports/:id/confirm` (INV-011). Failure recovery (INV-012), security (INV-013), testing (INV-014), performance (INV-015) and the verified contract (INV-016) are done. Not yet applied to Supabase, and the frontend page is not built.
 
 ## Overview
 
@@ -13,7 +13,7 @@ Imports a company's current stock (an opening) into Pango from one spreadsheet, 
 
 ## Handoff: read this first
 
-For anyone (person or agent) continuing the module. Updated 2026-11-25, with INV-014 awaiting acceptance.
+For anyone (person or agent) continuing the module. Updated 2026-11-25: every stage, INV-000 to INV-017, is accepted.
 
 ### Where the work is
 
@@ -43,7 +43,7 @@ For anyone (person or agent) continuing the module. Updated 2026-11-25, with INV
 
 ### What is left
 
-- INV-015 to INV-017: performance against Supabase (with approved thresholds), the final frontend contract checked against the running API, and delivery. Security (INV-013) and testing (INV-014) are done; see their open, pre-existing findings. Failures injected in the middle of a confirmation (INV-011) and recovery (INV-012) are already covered.
+- Nothing inside the module. Outside it: the frontend import page, Supabase migrations (with the owner's authorization) and the pull request to `dev`; see "Final report", item 16. Performance (INV-015) was measured locally with simulated latency; measure again against Supabase once the migrations are applied there. Security (INV-013) and testing (INV-014) are done; see their open, pre-existing findings. Failures injected in the middle of a confirmation (INV-011) and recovery (INV-012) are already covered.
 
 ### Known traps
 
@@ -59,11 +59,12 @@ For anyone (person or agent) continuing the module. Updated 2026-11-25, with INV
 
 ```bash
 pnpm lint && pnpm exec tsc --noEmit && pnpm test && pnpm build
+# benchmark, several minutes: pnpm test:perf (PERF_PLAN=rows:roundTripMs,... to choose)
 docker compose -f docker-compose.test.yml up -d
 env -u DATABASE_URL -u DIRECT_URL pnpm test:int
 ```
 
-At handoff: 390 unit and 69 integration tests passed.
+At handoff: 390 unit and 72 integration tests passed.
 
 ## Scope
 
@@ -120,111 +121,111 @@ Out of scope:
 
 ### ADR-INV-001 — Opening only, split across sessions
 
-Status: Approved
+Status: Implemented
 Context: The v0.4 template registers an opening ("no debe repetirse sobre saldos ya cargados"), while the first specification proposed reconciling to a target balance with decreases. Reconciling existing stock is a physical count, which is out of scope.
 Decision: Accept a row only when its identity (product + warehouse + location + lot) never had stock or movements. Never subtract. One file per session; a file over the session limit is rejected.
 Alternatives: Target-balance reconciliation (raise and lower to the file's quantity); the frontend splitting a large file into several sessions automatically.
 Rationale: Re-uploading a file cannot duplicate stock; no decreases, no conflicts with reservations, no revaluation of costs, no rules for stock in transit. Splitting automatically would leave a file half loaded when a later session fails.
 Consequences: An opening is corrected with manual adjustment movements. Large inventories need several files.
 Approval evidence: Owner, 2026-11-24 ("sí, carga inicial repartible en varias sesiones"; one file per session, "A por ahora").
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/validate.ts` (`ALREADY_HAS_STOCK`), `lookups.ts`; `validate.spec.ts`, `test/integration/inventory-import-validation.int-spec.ts`, `inventory-import-confirm.int-spec.ts`.
 
 ### ADR-INV-002 — The frontend reads the file; the API takes JSON only
 
-Status: Approved
+Status: Implemented
 Context: The movement history import already keeps workbooks out of the API ([CU-17 decision 5](../plans/cu-17-movement-history-import.md)).
 Decision: The browser reads the workbook, maps its columns and sends JSON rows in batches; the API never parses or generates spreadsheets.
 Alternatives: Uploading the workbook and parsing it in the API.
 Rationale: No ZIP/XML attack surface or spreadsheet library on the server; the same contract serves any source.
 Consequences: The API cannot prove the rows match the workbook; it validates them as untrusted input.
 Approval evidence: Specification section 6; owner, 2026-11-24.
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/inventory-imports.controller.ts`, `dto.ts`, `batch.ts`; `inventory-imports.security.spec.ts`, `test/integration/inventory-import-contract.int-spec.ts` (JSON-only routes).
 
 ### ADR-INV-003 — Static template in the frontend; validation only in the server
 
-Status: Approved
+Status: Implemented
 Context: The specification asked the API to generate a tenant-specific workbook with native validation.
 Decision: The template is a static file stored and offered for download by `pango-frontend`; it carries no native data validation that Pango relies on. Every rule is enforced by the API.
 Alternatives: A workbook generated by the API on each download, with dropdowns of the organization's warehouses and native validation.
 Rationale: Native validation is bypassed by pasting or scripts, so the API validates everything anyway; a static file needs no spreadsheet library or endpoint in the API.
 Consequences: No `GET /inventory-imports/template`. New or misspelled warehouses and categories show up in the preview before confirmation. Format reference: the v0.4 template, kept outside this repository.
 Approval evidence: Owner, 2026-11-24 ("solo el servidor"; "es un excel estático que guardaré en el frontend").
-Implementation and test references: none yet.
+Implementation and test references: No template route (`inventory-import-contract.int-spec.ts` lists the ten routes); every rule in `parse.ts` and `validate.ts`; the static template in the "Standard template" section.
 
 ### ADR-INV-004 — `inventory.import` authorizes the whole import, per warehouse
 
-Status: Approved
+Status: Implemented
 Context: Admins are always assigned to specific warehouses (`src/roles/role-policy.ts`); only the Owner holds an assignment on every warehouse.
 Decision: See INV-BR-15 and INV-BR-16.
 Alternatives: Also requiring `product.manage`, `category.manage` and `warehouse.manage`; an organization-scope permission; letting only the Owner create warehouses.
 Rationale: The owner wants Owner and Admin to do everything an import needs with one permission, without widening an Admin to warehouses they are not assigned to.
-Consequences: The import writes a role assignment when a non-Owner creates a warehouse. Which role is used when several roles grant the permission is settled in INV-003.
+Consequences: The import writes a role assignment when a non-Owner creates a warehouse. When several roles grant the permission, all of them are assigned (T7).
 Approval evidence: Owner, 2026-11-24 ("con tener el permiso del inventario ya puede acceder… el admin a la que tiene asignada"; "es mejor que el admin también pueda"; "A, asígnalo automáticamente").
-Implementation and test references: none yet.
+Implementation and test references: `prisma/tenant/migrations/20261124100000_inventory_import_permission`, `src/inventory-imports/inventory-import-access.ts`, `validate.ts`, `confirm.ts`; `test/integration/inventory-import-access.int-spec.ts`, `inventory-import-validation.int-spec.ts`, `inventory-import-confirm.int-spec.ts`. Several roles: every role of the creator that grants the permission is assigned (T7).
 
 ### ADR-INV-005 — Conflicts never change existing data
 
-Status: Approved
+Status: Implemented
 Decision: INV-BR-02, INV-BR-03, INV-BR-08 and INV-BR-12: identity-defining differences (unit, lot tracking, inconsistent rows) are errors; descriptive differences are warnings that keep Pango's values.
 Rationale: An opening must not silently rewrite the catalog; warnings never block, errors block the whole session (INV-FR-03).
 Approval evidence: Owner, 2026-11-24 (D2, D3, D8 approved; D11 revised to "identical rows count once").
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/validate.ts`; `validate.spec.ts`, `test/integration/inventory-import-confirm.int-spec.ts`.
 
 ### ADR-INV-006 — No artificial demand
 
-Status: Approved
+Status: Implemented
 Context: Demand is defined once in `src/demand/demand-rule.ts` (`demandCondition`): confirmed **outbound** movements whose type has `counts_as_demand`. It feeds the demand history and the forecast input. Of the six base movement types, only "Consumption issue" and "Sales issue" count as demand; no endpoint creates or edits movement types.
 Decision: The import records only inbound "Opening balance" movements (INV-BR-14).
 Consequences: The opening gives the forecast's stock series its starting point (`src/forecasting/forecast-input.ts` rebuilds stock from movements), and, as the first Pango movement of a product-warehouse, it is the cutover after which imported history stops counting ([`movement-imports.md`](movement-imports.md)).
 Approval evidence: Owner, 2026-11-24 (D13 approved; scope limited to the import module).
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/confirm.ts` ("Opening balance" only); `test/integration/inventory-import-confirm.int-spec.ts` (shared demand rule finds nothing), `inventory-import-http.int-spec.ts` (`GET /products/:id/demand` total 0).
 
 ### ADR-INV-007 — Cell values travel as text
 
-Status: Approved
+Status: Implemented
 Context: The specification proposed typed JSON (numbers, booleans). The owner decided that only the server validates (ADR-INV-003).
 Decision: Each value is sent as the cell's text (string) or null, as the movement history import does; the server parses numbers, dates and lists and reports bad values as row issues.
 Alternatives: Typed JSON converted by the frontend.
 Rationale: The frontend validates nothing; a bad cell shows up in the preview with its row and column instead of rejecting the batch; decimals keep their exact digits (no floating point); one format for both importers.
 Approval evidence: Owner, 2026-11-24 (C1–C7 approved: "apruebo todas").
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/batch.ts`, `parse.ts`; `batch.spec.ts`, `parse.spec.ts`.
 
 ### ADR-INV-008 — Batches under the existing 1 MB body limit
 
-Status: Approved
+Status: Implemented
 Context: `src/main.ts` limits JSON bodies to 1 MB for the whole API. Measured estimate: 181 bytes for a minimal row, 574 for a full one (about 1,800 full rows per MB).
 Decision: Keep the limit; the frontend splits rows into batches by their serialized UTF-8 size. 5,000 rows per batch is a ceiling, not a target.
 Alternatives: A route-specific parser up to 10 MiB.
 Rationale: No change to global settings; less memory per request.
 Approval evidence: Owner, 2026-11-24 (C2).
-Implementation and test references: none yet.
+Implementation and test references: `src/main.ts` unchanged; batches split by the frontend; `test/integration/inventory-import-rows.int-spec.ts`; HTTP check of the 413.
 
 ### ADR-INV-009 — Synchronous processing, one active import per organization, lazy expiry
 
-Status: Approved
+Status: Implemented
 Decision: Validation and confirmation answer in the same request; no background jobs. An organization has at most one open import; an open import with no activity for 24 hours expires, which is applied when it is next read or when someone starts another import (no scheduler). Errors found in validation are fixed in the workbook and sent as a new import; an open import can be validated again without resending rows.
 Alternatives: Background jobs with progress; one import per user; correcting rows inside an import.
 Rationale: Nothing can stay stuck "processing"; no new infrastructure; one version of the data per import. Revisited if INV-015 measurements require it.
 Approval evidence: Owner, 2026-11-24 (C5, C6, C7).
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/inventory-imports.service.ts`; `test/integration/inventory-import-sessions.int-spec.ts`, `inventory-import-recovery.int-spec.ts`.
 
 ### ADR-INV-010 — Staging tables, one open import enforced by the database, staged data deleted on close
 
-Status: Approved
+Status: Implemented
 Decision: Four tenant tables (`inventory_imports`, `inventory_import_batches`, `inventory_import_rows`, `inventory_import_issues`) and a nullable `movements.inventory_import_id`. A partial unique index allows one open import per organization. Closing an import (completed, cancelled, expired) deletes its batches, rows and issues in the same transaction; the import row keeps mapping, summary and result.
 Alternatives: Reusing the movement history import tables; keeping staged rows for audit.
 Rationale: The database, not only the code, prevents two open imports; staged customer data is not kept once useless; the import row is enough for audit and for answering a repeated confirmation.
 Approval evidence: Owner, 2026-11-24 (T1, T6: "apruebo todas").
-Implementation and test references: none yet.
+Implementation and test references: `prisma/tenant/migrations/20261124200000_inventory_imports`; `test/integration/inventory-import-staging.int-spec.ts`.
 
 ### ADR-INV-011 — Confirmation re-validates under locks inside one transaction
 
-Status: Approved
+Status: Implemented
 Decision: Confirmation takes a per-organization lock, locks the import, locks the rows it depends on in a fixed order, runs the same validation as the preview and compares its outcome with the validated one; any difference is `IMPORT_STALE`. Then it creates entities, lots and stock through `MovementsService.record()` in the same transaction.
 Alternatives: A list of specific staleness checks; validating without locks.
 Rationale: One validation code path cannot miss a case; the locks are the ones movements already use, so imports and ordinary operations wait for each other instead of racing.
 Approval evidence: Owner, 2026-11-24 (T2–T5).
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/confirm.ts`, `inventory-imports.service.ts` (`confirm`); `test/integration/inventory-import-confirm.int-spec.ts`.
 
 ### ADR-INV-012 — Real PostgreSQL for integration tests
 
@@ -236,13 +237,13 @@ Implementation and test references: `docker-compose.test.yml`, `vitest.config.in
 
 ### ADR-INV-013 — 5,000 rows per import, from measurements
 
-Status: Approved
+Status: Implemented
 Context: The T11 benchmark (see Technical design) measured the existing stock engine at about 3 database queries per opening line (6 with lots); 50,000 lines took 134 s on a local database with no network latency, while every affected product stays locked.
 Decision: The default limit is 5,000 rows per import (configurable). A set-based stock path for large openings is a future improvement, not part of this module.
 Alternatives: 10,000 rows; rewriting the movement engine's apply step in bulk now.
 Rationale: Keeps confirmations short and the engine untouched; larger inventories are split into several files (INV-FR-02).
 Approval evidence: Owner, 2026-11-24 ("A por ahora, deja C como mejora futura").
-Implementation and test references: none yet.
+Implementation and test references: `src/inventory-imports/inventory-import-config.ts`; `test/performance/inventory-import.perf-spec.ts`.
 
 ### ADR-INV-014 — Bounded waits, and retryable failures answer 503
 
@@ -255,7 +256,7 @@ Implementation and test references: `src/inventory-imports/inventory-import-erro
 
 ## API contract (INV-002)
 
-Approved design, not implemented. Status codes and error codes are final unless a later stage changes them with approval; examples will be checked against the running API in INV-016.
+Implemented and verified against the running API on 2026-11-25 (INV-016): the examples below are real responses captured by `test/integration/inventory-import-contract.int-spec.ts`, which also checks every response of every route against its OpenAPI schema (no undocumented field, no missing required field) and that OpenAPI lists exactly the module's ten routes. Run it with `CONTRACT_EXAMPLES_OUT=<file>` to capture them again.
 
 ### Conventions
 
@@ -392,20 +393,23 @@ Response (201):
 
 ```json
 {
-  "id": 15,
+  "id": 1,
   "status": "RECEIVING",
   "schemaVersion": 1,
   "fileName": "inventario-noviembre.xlsx",
   "sheetName": "Inventario",
-  "totalRows": 4800,
+  "totalRows": 3,
   "receivedRows": 0,
   "revision": 0,
   "summary": null,
   "result": null,
-  "createdBy": { "id": 4, "name": "Ana Pérez" },
-  "createdAt": "2026-11-25T14:02:11.000Z",
-  "updatedAt": "2026-11-25T14:02:11.000Z",
-  "expiresAt": "2026-11-26T14:02:11.000Z",
+  "createdBy": {
+    "id": 1,
+    "name": "Test Owner"
+  },
+  "createdAt": "2026-11-25T06:26:01.946Z",
+  "updatedAt": "2026-11-25T06:26:01.946Z",
+  "expiresAt": "2026-11-26T06:26:01.946Z",
   "confirmedAt": null
 }
 ```
@@ -439,7 +443,15 @@ Response (201):
 Response (200):
 
 ```json
-{ "importId": 15, "batchNumber": 1, "acceptedRows": 1, "receivedRows": 1, "totalRows": 4800, "status": "RECEIVING", "replayed": false }
+{
+  "importId": 1,
+  "batchNumber": 1,
+  "acceptedRows": 2,
+  "receivedRows": 2,
+  "totalRows": 3,
+  "status": "RECEIVING",
+  "replayed": false
+}
 ```
 
 ### `POST /inventory-imports/:id/validate`
@@ -449,27 +461,77 @@ No body. Allowed in `RECEIVING` once `receivedRows = totalRows` (otherwise 409 `
 ```json
 {
   "import": {
-    "id": 15,
+    "id": 1,
     "status": "READY",
+    "schemaVersion": 1,
+    "fileName": "inventario-noviembre.xlsx",
+    "sheetName": "Inventario",
+    "totalRows": 3,
+    "receivedRows": 3,
     "revision": 1,
     "summary": {
-      "totalRows": 4800,
-      "validRows": 4798,
-      "invalidRows": 0,
-      "duplicateRows": 2,
+      "reuse": {
+        "lots": 0,
+        "products": 0,
+        "categories": 0,
+        "warehouses": 1
+      },
+      "create": {
+        "lots": 0,
+        "products": 2,
+        "categories": 1,
+        "warehouses": 0
+      },
       "errors": 0,
-      "warnings": 37,
-      "issueCounts": { "COST_MISSING": 30, "PRODUCT_DIFFERS": 5, "DUPLICATE_ROW": 2 },
-      "stockRows": 4670,
-      "create": { "categories": 3, "products": 410, "warehouses": 1, "lots": 220 },
-      "reuse": { "categories": 25, "products": 1900, "warehouses": 2, "lots": 0 }
-    }
+      "warnings": 2,
+      "stockRows": 2,
+      "totalRows": 3,
+      "validRows": 2,
+      "invalidRows": 0,
+      "issueCounts": {
+        "COST_MISSING": 1,
+        "DUPLICATE_ROW": 1
+      },
+      "duplicateRows": 1
+    },
+    "result": null,
+    "createdBy": {
+      "id": 1,
+      "name": "Test Owner"
+    },
+    "createdAt": "2026-11-25T06:26:01.946Z",
+    "updatedAt": "2026-11-25T06:26:02.117Z",
+    "expiresAt": "2026-11-26T06:26:02.116Z",
+    "confirmedAt": null
   },
   "issues": {
+    "revision": 1,
     "items": [
-      { "rowNumber": 245, "field": "unitCost", "sourceColumn": { "column": 8, "header": "Costo unitario" }, "severity": "WARNING", "code": "COST_MISSING", "message": "No unit cost: the stock takes the product's current average cost", "value": null }
+      {
+        "rowNumber": 3,
+        "field": "unitCost",
+        "sourceColumn": {
+          "column": 8,
+          "header": "Costo unitario"
+        },
+        "severity": "WARNING",
+        "code": "COST_MISSING",
+        "message": "No unit cost: the stock takes the product's current average cost",
+        "value": null
+      },
+      {
+        "rowNumber": 4,
+        "field": null,
+        "sourceColumn": null,
+        "severity": "WARNING",
+        "code": "DUPLICATE_ROW",
+        "message": "Identical to row 2: counted once",
+        "value": null
+      }
     ],
-    "total": 37, "page": 1, "pageSize": 25
+    "total": 2,
+    "page": 1,
+    "pageSize": 25
   }
 }
 ```
@@ -522,9 +584,22 @@ Issue fields: `rowNumber` (null for an issue of the whole import), `field` (null
   "rowNumber": 2,
   "status": "VALID",
   "sku": "TOR-001",
-  "product": { "id": 31, "name": "Tornillo", "isNew": false },
-  "category": { "id": 7, "name": "Tornillería", "isNew": false },
-  "warehouse": { "id": 1, "code": "PRINCIPAL", "name": "Principal", "isNew": false },
+  "product": {
+    "id": null,
+    "name": "Tornillo hexagonal",
+    "isNew": true
+  },
+  "category": {
+    "id": null,
+    "name": "Tornillería",
+    "isNew": true
+  },
+  "warehouse": {
+    "id": 1,
+    "code": "NORTE",
+    "name": "NORTE",
+    "isNew": false
+  },
   "locationCode": "DEFAULT",
   "lot": null,
   "stockUnit": "EA",
@@ -554,16 +629,58 @@ Only in `READY`, with the revision of the last validation. Everything is written
 
 ```json
 {
-  "id": 15,
+  "id": 1,
   "status": "COMPLETED",
+  "schemaVersion": 1,
+  "fileName": "inventario-noviembre.xlsx",
+  "sheetName": "Inventario",
+  "totalRows": 3,
+  "receivedRows": 3,
   "revision": 1,
-  "confirmedAt": "2026-11-25T14:20:45.000Z",
+  "summary": {
+    "reuse": {
+      "lots": 0,
+      "products": 0,
+      "categories": 0,
+      "warehouses": 1
+    },
+    "create": {
+      "lots": 0,
+      "products": 2,
+      "categories": 1,
+      "warehouses": 0
+    },
+    "errors": 0,
+    "warnings": 2,
+    "stockRows": 2,
+    "totalRows": 3,
+    "validRows": 2,
+    "invalidRows": 0,
+    "issueCounts": {
+      "COST_MISSING": 1,
+      "DUPLICATE_ROW": 1
+    },
+    "duplicateRows": 1
+  },
   "result": {
-    "stockRows": 4670,
-    "movements": 3,
-    "created": { "categories": 3, "products": 410, "warehouses": 1, "lots": 220 },
-    "assignedWarehouses": 1
-  }
+    "created": {
+      "lots": 0,
+      "products": 2,
+      "categories": 1,
+      "warehouses": 0
+    },
+    "movements": 2,
+    "stockRows": 2,
+    "assignedWarehouses": 0
+  },
+  "createdBy": {
+    "id": 1,
+    "name": "Test Owner"
+  },
+  "createdAt": "2026-11-25T06:26:01.946Z",
+  "updatedAt": "2026-11-25T06:26:02.290Z",
+  "expiresAt": null,
+  "confirmedAt": "2026-11-25T06:26:02.288Z"
 }
 ```
 
@@ -589,6 +706,51 @@ Implemented in INV-011 (`src/inventory-imports/confirm.ts`, `confirm()` in the s
 - Every read and write first expires the open imports idle for longer than the expiry hours (and deletes their staged data), so `status` and `expiresAt` are always current.
 
 ### Error codes by HTTP status
+
+Real error bodies (from the contract test):
+
+```json
+{
+  "incomplete": {
+    "statusCode": 409,
+    "code": "IMPORT_INCOMPLETE",
+    "message": "Send every row before validating: 2 of 3 received",
+    "receivedRows": 2,
+    "totalRows": 3
+  },
+  "mappingInvalid": {
+    "statusCode": 400,
+    "code": "MAPPING_INVALID",
+    "message": "The column mapping is not valid",
+    "problems": [
+      "mapping.sku is required",
+      "mapping.name is required",
+      "mapping.category is required",
+      "mapping.stockUnit is required",
+      "mapping.warehouse is required",
+      "mapping.tracksLots is required",
+      "mapping.stockQuantity is required"
+    ]
+  },
+  "limitExceeded": {
+    "statusCode": 413,
+    "code": "IMPORT_LIMIT_EXCEEDED",
+    "message": "An inventory import holds at most 5000 rows; split the file"
+  },
+  "notFound": {
+    "statusCode": 404,
+    "code": "IMPORT_NOT_FOUND",
+    "message": "Inventory import not found"
+  },
+  "closed": {
+    "statusCode": 409,
+    "code": "IMPORT_CLOSED",
+    "message": "The import is closed (completed, cancelled or expired)"
+  }
+}
+```
+
+Only these extra fields exist besides `statusCode`, `code` and `message`: `problems` (`MAPPING_INVALID`, `ROWS_INVALID`), `importId` (`IMPORT_ACTIVE_EXISTS`, for the creator), `receivedRows` and `totalRows` (`IMPORT_INCOMPLETE`, `ROWS_EXCEED_TOTAL`). `ValidationPipe` errors also carry `error`. The 413 for bodies over 1 MB has no `code`.
 
 | Status | Codes |
 |---|---|
@@ -718,25 +880,88 @@ Measured on 2026-11-25 (local Docker PostgreSQL 17, Node 24).
 - Every stage also broke its own code on purpose (removing a lock, a check or a mapping) to prove the tests catch it, and reverted it; see the traceability evidence.
 - `pnpm exec tsc --noEmit` reports only the three errors that existed before this module.
 
-## Frontend integration (INV-002)
+## Performance (INV-015)
+
+Measured on 2026-11-25 with `pnpm test:perf` (`test/performance/inventory-import.perf-spec.ts`). Thresholds approved by the owner before measuring ("apruebo umbrales y metas").
+
+**Method.** Local Docker PostgreSQL 17, Node 24.21, 8 CPUs, 12 GB RAM. Supabase was not used: the module's migrations are applied there only once the module works with the frontend. Network latency to the database is simulated by a TCP proxy (`test/performance/latency-proxy.ts`) that delays every chunk by half the round trip in each direction. Synthetic file: half the SKUs already exist without stock, three warehouses, 50 new categories, a quarter of the rows lot-tracked with an expiry date, one row in ten without cost; batches split under 1 MB. One second into each confirmation, a sale of a product outside the import is recorded.
+
+| Rows | Round trip | Batches | Largest batch | Receive (all) | Validate | Confirm | Sale of another product | Memory growth | Movements |
+|---|---|---|---|---|---|---|---|---|---|
+| 1,000 | 0 ms | 1 | 0.21 s | 0.21 s | 0.44 s | 4.2 s | 0.02 s | 40 MB | 6 |
+| 2,500 | 0 ms | 1 | 0.39 s | 0.40 s | 0.85 s | 8.7 s | 0.01 s | 99 MB | 6 |
+| 5,000 | 0 ms | 2 | 0.48 s | 0.76 s | 1.6 s | 16.8 s | 0.02 s | 27 MB | 9 |
+| 5,000 | 1 ms | 2 | 0.52 s | 0.83 s | 2.4 s | 70.4 s | 0.02 s | 9 MB | 9 |
+| 1,000 | 5 ms | 1 | 0.27 s | 0.27 s | 0.87 s | 23.8 s | 0.02 s | 2 MB | 6 |
+| 5,000 | 5 ms | 2 | 0.61 s | 0.95 s | 2.9 s | 116.0 s | 0.02 s | 3 MB | 9 |
+| 1,000 | 20 ms | 1 | 0.53 s | 0.53 s | 2.2 s | 84.7 s | 0.02 s | 1 MB | 6 |
+
+A file of 5,001 rows is refused (`IMPORT_LIMIT_EXCEEDED`). Each confirmation holds one database connection (the second one sampled is the concurrent sale's).
+
+| Threshold | Measured | Result |
+|---|---|---|
+| Each 1 MB batch ≤ 2 s | at most 0.61 s | Met |
+| Validate 5,000 rows ≤ 10 s | at most 2.9 s | Met |
+| Confirm 5,000 rows without latency ≤ 60 s | 16.8 s | Met |
+| Confirm 5,000 rows at 5 ms ≤ 120 s | 116.0 s | Met, with 4 s of margin |
+| A sale of another product during a confirmation ≤ 2 s | at most 0.02 s | Met |
+| Memory growth during a confirmation ≤ 500 MB | at most 99 MB | Met |
+| One database connection per confirmation | 1 | Met |
+
+Reading the results:
+
+- Receiving and validating stay under 3 s at the limit; confirming dominates, because the movement engine writes line by line (about three round trips per line, six with lots).
+- Confirmation time grows with network latency: the 20 ms case (1,000 rows, 85 s) shows that 5,000 rows would take several minutes and exceed the 120 s limit. The API must run in the same region as Supabase.
+- The 1 ms row is pessimistic: the proxy's timers cannot wait less than about 1 ms per direction, so it adds more than 1 ms per round trip. The 5 ms and 20 ms rows are closer to their nominal latency.
+- While a confirmation runs, only the products it imports wait; the rest of Pango is not slowed down (the concurrent sale took 0.02 s in every case).
+- These are local measurements with simulated latency, not a guarantee of production capacity.
+
+Recommendations (no change made): keep 5,000 rows per import; deploy the API in Supabase's region; since 5,000 rows at 5 ms leave only 4 s of margin under the 120 s confirmation limit, set `INVENTORY_IMPORT_CONFIRM_TIMEOUT_MS` to 300000 in production, or lower `INVENTORY_IMPORT_MAX_ROWS`, if the measured round trip there is 5 ms or more. Large imports are best confirmed outside business hours, because sales of the imported products wait for the confirmation.
+
+## Trying it locally
+
+Without Supabase, on the throwaway database of `docker-compose.test.yml` (data lives in memory and is lost when the container stops). Port 3000 may be taken on this machine, so the API runs on 3001.
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+docker exec pango-postgres-test createdb -U pango pango_dev     # once per container start
+export DEV=postgresql://pango:pango@127.0.0.1:54329/pango_dev
+DIRECT_URL=$DEV DATABASE_URL=$DEV pnpm db:migrate:control
+DIRECT_URL=$DEV DATABASE_URL=$DEV pnpm tenant:create --subdomain demo --tax-id 900000000-1 \
+  --legal-name "Demo SME SAS" --country CO --city Bogotá --business-sector RETAIL --team-size SIZE_1_5 \
+  --product-count COUNT_1_100 --email owner@demo.pango.local --name "Demo Owner" --password "change-me-123"
+DATABASE_URL=$DEV DIRECT_URL=$DEV PORT=3001 LOGIN_EMAIL_CODE_ENABLED=false pnpm start:dev
+```
+
+Then open `http://localhost:3001/docs`, call `POST /auth/login` with header `X-Tenant: demo` and `{ "email": "owner@demo.pango.local", "password": "change-me-123" }` (it sets the session cookie), and run the flow: `GET /inventory-imports/fields` → `POST /inventory-imports` → `POST /inventory-imports/{id}/rows` → `POST /inventory-imports/{id}/validate` → `GET …/rows` and `…/issues` → `POST /inventory-imports/{id}/confirm`, using the examples of the API contract. Create a warehouse first with `POST /warehouses`, or let the import create one (it needs `warehouseCode`). Checked on 2026-11-25: the login and `GET /inventory-imports/fields` answer, and Swagger lists the ten routes.
+
+To try it from `pango-frontend`, its import page must first be rewritten to this contract (the current one still calls the old mock, `/imports/analyze`); then run it with `VITE_USE_MOCK=false` and its dev proxy pointed at `http://localhost:3001`.
+
+## Frontend integration (final, INV-016)
+
+Everything a `pango-frontend` implementation needs; the authoritative rules stay in the API, so the frontend validates nothing.
 
 Flow: offer the static template for download → the user picks a workbook → read it locally → map columns → build rows → `POST /inventory-imports` → send batches → `POST …/validate` → show the summary, preview rows and issues → `POST …/confirm` with the revision → show the result.
 
+- **Session and organization:** call the API with credentials (`credentials: 'include'`, so the HttpOnly session cookies travel) and send `X-Tenant: <subdomain>` when the API is served from another host than the organization's subdomain; requests from other origins are refused (`CSRF_REJECTED`). Non-browser clients may use `Authorization: Bearer`.
+- **Who sees the feature:** only users holding `inventory.import`; without it every route answers 403 `FORBIDDEN`, so `GET /inventory-imports/fields` answering 403 is a reliable signal to hide the feature.
 - **Reading the workbook:** read values only; do not run macros or formulas, do not follow external links, and bound the file size, rows, cells and processing time. Use the sheet `Inventario` of the template, or let the user choose a sheet.
 - **Columns:** match headers to the dictionary ignoring case, accents and the `*` markers; let the user fix the mapping; send it in `mapping` with the column number, which also disambiguates repeated headers.
 - **Rows:** skip completely blank rows (they do not count in `totalRows`); keep the file's row number in `rowNumber`.
 - **Values:** send each cell as text. Codes (SKU, warehouse, lot, location) as displayed, so leading zeros are kept. Numbers as their full value with `.` and no thousands separator. Excel dates as `YYYY-MM-DD`. Empty cells as null or omitted, never `"0"`. Do not validate or fix contents: the server reports them.
-- **Batches:** fill each batch while the serialized body (`JSON.stringify`, measured in UTF-8 bytes) stays under `limits.maxRequestBytes` with some margin and at most `limits.maxRowsPerBatch` rows; number them from 1.
+- **Batches:** fill each batch while the serialized body (`JSON.stringify`, measured in UTF-8 bytes) stays under `limits.maxRequestBytes` with some margin and at most `limits.maxRowsPerBatch` rows; number them from 1. A row whose values add up to more than `limits.maxRowChars` characters rejects its batch (`ROWS_INVALID`), as does any value over `limits.maxValueChars`. A body over 1 MB answers 413 without a `code`; a file over `limits.maxRowsPerImport` rows answers 413 `IMPORT_LIMIT_EXCEEDED` on creation: ask the user to split it.
 - **Retries:** on a network error, timeout or 5xx, resend the same batch with the same `batchNumber` and content. 409 `BATCH_CONFLICT` means the frontend sent different data under the same number or row: stop and start again. Keep one `clientRequestId` per file for `POST /inventory-imports`.
 - **Completeness:** validate when `receivedRows` equals `totalRows`; on 409 `IMPORT_INCOMPLETE`, send the missing rows.
 - **Preview:** show `summary`, then rows and issues by page. With errors (`INVALID`), the user fixes the workbook and starts a new import (cancel the old one); warnings do not block.
-- **Confirmation:** send the `revision` shown. On 409 `IMPORT_STALE`, validate again and show the new preview before confirming.
+- **Confirmation:** send the `revision` shown (every preview page carries the `revision` it belongs to). On 409 `IMPORT_STALE`, validate again and show the new preview before confirming.
+- **Waiting:** validation and confirmation answer when they finish; there is no progress endpoint. Measured locally, 5,000 rows validate in under 3 s and confirm in 17 s to about 2 minutes depending on the database latency (see Performance). Show a waiting state and give the HTTP client a timeout above the confirmation limit (120 s by default) with some margin. If the client gives up first, call `GET /inventory-imports/:id` (or repeat the confirmation, which answers the stored result) before telling the user anything.
+- **History:** `GET /inventory-imports` lists the imports the user may see, newest first, with their status, summary and result.
 - **Open import:** on 409 `IMPORT_ACTIVE_EXISTS` with `importId`, offer to resume or cancel it; without it, someone else's import is open (it expires after 24 hours without activity).
 - **503 `IMPORT_BUSY`:** nothing was saved; repeat the same request (after a short wait). It is safe for every route.
 
 ## Permissions (INV-004)
 
-Implemented, not yet used by any route (the endpoints come in INV-007 onwards).
+Implemented; every route of the module requires it.
 
 - `inventory.import`: warehouse scope, module `inventory`, added by the tenant migration `20261124100000_inventory_import_permission`. It grants the permission to the system role (Owner) and to the role named `Admin`; Operator and custom roles are not changed. An organization that renamed or deleted `Admin` gets it only on the Owner; the Owner can add it to any role through role management, which lists permissions from the database.
 - `src/inventory-imports/inventory-import-access.ts`:
@@ -747,7 +972,7 @@ Implemented, not yet used by any route (the endpoints come in INV-007 onwards).
 
 ## Technical design (INV-003)
 
-Approved design (T1–T11), not implemented except the integration test harness.
+Approved design (T1–T11), implemented in INV-005 (persistence), INV-011 (confirmation) and INV-012 (bounded waits).
 
 ### Persistence
 
@@ -845,6 +1070,44 @@ Agreed with the owner, not part of this module:
 - A set-based stock path for openings, writing thousands of lines per query, to raise the 5,000-row limit (ADR-INV-013).
 - A database rule against case-insensitive duplicates of SKUs, warehouse codes and names and category names.
 
+## Final report (INV-017)
+
+Prepared and accepted by the owner on 2026-11-25: the backend module is implementation-complete. Production release (Supabase migrations, frontend, pull request) remains a separate, owner-controlled step.
+
+1. **Summary.** An opening of current stock from one spreadsheet: the frontend reads the static template and sends JSON batches; the API validates every row against the organization's data, previews the result by revision, and confirms it in one transaction through the movement engine, or writes nothing. 10 routes, one permission, four staging tables, two backward-compatible changes to existing modules.
+2. **Approved scope.** "Approved requirements" (INV-FR-01..09, INV-BR-01..18), the API contract (INV-API-01..12), the technical design (INV-TD-01..07) and security (INV-SEC-01..05); decisions ADR-INV-001..014. Out of scope: see "Scope".
+3. **Traceability.** "Requirements traceability": every row has implementation paths, tests and dated evidence.
+4. **Architecture.** `src/inventory-imports/`: `fields.ts` (dictionary), `batch.ts`, `parse.ts`, `lookups.ts`, `validate.ts` (pure rules and plan), `confirm.ts` (locks and writes), `inventory-import-access.ts`, `inventory-import-config.ts`, the service and the controller. See "Technical design".
+5. **Database.** Tenant migrations `20261124100000_inventory_import_permission` (permission, data only) and `20261124200000_inventory_imports` (four staging tables, nullable `movements.inventory_import_id`, hand-written constraints). Existing data unchanged (tested on an existing tenant).
+6. **API.** "API contract", verified against the running app; OpenAPI at `/docs`.
+7. **Security.** "Security": no open critical or high finding of the module; S2 (body-parser, high) is pre-existing and global.
+8. **Inventory integrity.** Opening only (identities without stock or movements), never subtracts, no artificial demand, average costs and alerts through the movement engine, creator assignment, everything in one transaction (12 injected failures leave nothing).
+9. **Transactions and concurrency.** Locks in the order of the movement engine, re-validation under locks (`IMPORT_STALE`), bounded waits and `503 IMPORT_BUSY` (ADR-INV-011, ADR-INV-014); deterministic and racing tests.
+10. **Tests.** "Testing": 390 unit, 72 integration (including HTTP end to end and contract), 1 e2e; every stage proved its tests catch a deliberate break.
+11. **Coverage.** 97.11% lines, 88.21% branches of the module (targets 90% and 85%, approved).
+12. **Performance.** "Performance": every approved threshold met locally with simulated latency.
+13. **Migration and deployment.** Apply the two tenant migrations with `pnpm tenant:migrate` (new tenants get them on sign-up); run `pnpm prisma:generate` and `pnpm build`; add the optional `INVENTORY_IMPORT_*` variables (see `.env.example`; consider `INVENTORY_IMPORT_CONFIRM_TIMEOUT_MS=300000`); deploy the API in Supabase's region. Rollback: the migrations only add; to undo, drop the four tables, the column and the permission rows in a new migration after confirming no import was used. Not done: the owner decided to apply them to Supabase once the module works with the frontend.
+14. **Frontend.** "Frontend integration (final)", "Standard template" and "Trying it locally".
+15. **Limitations and residual risks.** 5,000 rows per import (larger files are split); a confirmation of many rows makes sales of the imported products wait; an idle import's staged data stays until the next import request of the organization; only the creator cancels an open import; case-insensitive duplicates created by hand at the same instant (S5); body-parser (S2) and no rate limiting (S3) across the API; performance not yet measured against Supabase.
+16. **Outstanding work outside the module.** Rewrite the frontend import page; test frontend and API together; apply the migrations to Supabase and measure there; open the pull request to `dev`; future improvements (bulk stock path for larger openings, database rule against case duplicates); update body-parser for the whole API.
+17. **Acceptance checklist.**
+
+| Item | State |
+|---|---|
+| Every approved requirement implemented and verified | Yes (traceability) |
+| Every route operational, no mocks or placeholders in production code | Yes |
+| Atomicity proven against real PostgreSQL | Yes (12 injected failures) |
+| No duplicate stock on retries; invariants preserved; no artificial demand | Yes |
+| Concurrency tested (purchases, simultaneous confirmations, locks) | Yes |
+| Tenant isolation and warehouse authorization tested | Yes |
+| No open critical or high finding of the module | Yes (S2 is global, pre-existing) |
+| Build, lint (0 warnings in the module) and every test suite pass | Yes |
+| Performance thresholds approved and met | Yes (local, simulated latency) |
+| Migrations verified on new and existing tenants | Yes (local); not applied to Supabase by decision |
+| Documentation, OpenAPI and frontend contract consistent | Yes (contract test) |
+| Stages INV-000 to INV-016 accepted by the owner | Yes |
+| INV-017 accepted by the owner | Yes, 2026-11-25 |
+
 ## Discovery (INV-000)
 
 Accepted by the owner on 2026-11-24. Inspected `dev` at `bd52a65`.
@@ -880,9 +1143,9 @@ Accepted by the owner on 2026-11-24. Inspected `dev` at `bd52a65`.
 | INV-012 | Lifecycle and failure recovery | ACCEPTED | 2026-11-25 ("acepto INV-011 y autorizo INV-012") | 2026-11-25 ("acepto INV-012 y autorizo INV-013") | Unit 13/13 (`inventory-import-errors.spec.ts`); integration 4/4 (`inventory-import-recovery.int-spec.ts`); full suite 374 unit, 63 integration | Recovery and retention, ADR-INV-014 |
 | INV-013 | Security hardening | ACCEPTED | 2026-11-25 ("acepto INV-012 y autorizo INV-013") | 2026-11-25 ("acepto INV-013 y autorizo INV-014") | Unit 15/15 (`inventory-imports.security.spec.ts`) + row limit; integration 3/3 (`inventory-import-isolation.int-spec.ts`); HTTP checks; `pnpm audit --prod` | Security |
 | INV-014 | Integration and regression testing | ACCEPTED | 2026-11-25 ("acepto INV-013 y autorizo INV-014") | 2026-11-25 ("acepto INV-014 y autorizo INV-015") | Unit 390/390; integration 69/69 (HTTP end to end 3/3); e2e 1/1; module coverage 97.11% lines, 88.21% branches | Testing |
-| INV-015 | Performance and load testing | IN_PROGRESS | 2026-11-25 ("acepto INV-014 y autorizo INV-015") | — | — | — |
-| INV-016 | Final frontend integration contract | PENDING | — | — | — | — |
-| INV-017 | Production readiness and final acceptance | PENDING | — | — | — | — |
+| INV-015 | Performance and load testing | ACCEPTED | 2026-11-25 ("acepto INV-014 y autorizo INV-015"; thresholds: "apruebo umbrales y metas") | 2026-11-25 ("acepto INV-015 y autorizo INV-016") | `pnpm test:perf` 8/8; every approved threshold met | Performance |
+| INV-016 | Final frontend integration contract | ACCEPTED | 2026-11-25 ("acepto INV-015 y autorizo INV-016") | 2026-11-25 ("acepto INV-016 y autorizo INV-017") | Contract test 3/3 (`inventory-import-contract.int-spec.ts`); codes in code and doc match both ways; lint 0 warnings in the module | API contract (verified examples), Frontend integration (final) |
+| INV-017 | Production readiness and final acceptance | ACCEPTED | 2026-11-25 ("acepto INV-016 y autorizo INV-017") | 2026-11-25 ("acepto INV-017, haz commit y push") | Final report; local run checked (login, fields, Swagger) | Final report, Trying it locally |
 
 Approval process (owner, 2026-11-24, from INV-004): authorizing a stage also approves its proposal; the proposal is still shown, implementation starts at once, and the stage stops only for final acceptance.
 
@@ -943,10 +1206,15 @@ INV-006 was "dynamic XLSX template" in the specification; after ADR-INV-003 its 
 | INV-SEC-03 | Staged size bound | A row over 4,096 characters → `ROWS_INVALID`; `maxRowChars` in `GET /fields` | `src/inventory-imports/batch.ts`; `inventory-import-config.ts` | `src/inventory-imports/batch.spec.ts`; `inventory-import-sessions.int-spec.ts` | 2026-11-25: passed; without the check its test failed (check reverted) | Implemented, awaiting acceptance |
 | INV-SEC-04 | Session and CSRF on every route | No `@Public()`; no session → 401; foreign origin with a session cookie → 403 | `src/inventory-imports/inventory-imports.controller.ts` (global guards) | `inventory-imports.security.spec.ts`; HTTP checks | 2026-11-25: passed | Implemented, awaiting acceptance |
 | INV-SEC-05 | Dependency review | No new dependency; audit findings recorded with severity | `package.json` (only `test:int` added) | `pnpm audit --prod` | 2026-11-25: 3 high, 3 moderate, 2 low, all pre-existing (S2, S4) | Reviewed, awaiting acceptance |
-| INV-TD-06 | Limit from measurements (ADR-INV-013) | Default 5,000 rows per import; benchmark recorded with its environment | — | — | Benchmark table (T11) | Approved |
+| INV-API-12 | Contract verified against the running API | Every response of every route conforms to its OpenAPI schema; OpenAPI lists exactly the ten routes; error bodies carry only documented fields; every issue and error code the module produces is documented, and every documented one is produced; examples are real responses | `src/inventory-imports/` (controllers, DTOs, responses) | `test/integration/inventory-import-contract.int-spec.ts` | 2026-11-25: 3/3 passed; with an undocumented field added to a response the test failed (check reverted) | Implemented, awaiting acceptance |
+| INV-TD-06 | Limit from measurements (ADR-INV-013) | Default 5,000 rows per import; benchmark recorded with its environment | `src/inventory-imports/inventory-import-config.ts` (5,000 by default) | `test/performance/inventory-import.perf-spec.ts` | 2026-11-25: 1,000 to 5,000 rows at 0 to 20 ms of simulated latency; every approved threshold met (5,000 rows at 5 ms confirmed in 116.0 s of 120 s); 5,001 rows refused | Implemented, awaiting acceptance |
 
 ## Change log
 
+- 2026-11-25 — INV-017 accepted: the backend module is complete.
+- 2026-11-25 — INV-016 accepted. INV-017: final report, local trial instructions (checked), status set for final acceptance.
+- 2026-11-25 — INV-015 accepted. INV-016: contract test against OpenAPI and real responses, examples replaced by real ones, error extras documented, frontend guide completed (session, visibility, limits, waiting, history), stale statements and ADR statuses updated, lint warnings in the module fixed.
+- 2026-11-25 — INV-014 accepted; performance thresholds and coverage targets approved. INV-015: benchmark (`pnpm test:perf`, latency proxy), measurements from 1,000 to 5,000 rows at 0 to 20 ms, every threshold met, recommendations recorded.
 - 2026-11-25 — INV-013 accepted. INV-014: HTTP end-to-end test through the real app, regression of the touched modules, test inventory and module coverage (97.11% lines, 88.21% branches).
 - 2026-11-25 — INV-012 accepted. INV-013: security review (authentication, CSRF, authorization, tenant isolation, disclosure, request validation, SQL, resources, logs, dependencies); 4,096-character row limit (S1); open pre-existing findings recorded; security, isolation and HTTP checks.
 - 2026-11-25 — INV-011 accepted. INV-012: bounded lock waits and statements in every import transaction, `503 IMPORT_BUSY` for retryable failures (ADR-INV-014), recovery and retention documented per state, a creation race fixed; recovery tests (lock timeout, cut connection, restart, lost answers).
