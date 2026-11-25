@@ -271,7 +271,7 @@ export function checkMapping(input: unknown): {
     const taken = columns.get(column as number);
     if (taken) {
       problems.push(
-        `mapping.${key} uses column ${column}, already mapped to ${taken}`,
+        `mapping.${key} uses column ${column as number}, already mapped to ${taken}`,
       );
       continue;
     }

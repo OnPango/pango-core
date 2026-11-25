@@ -26,7 +26,7 @@ const config = {
 
 function request(
   overrides: Partial<CreateInventoryImportDto> = {},
-): CreateInventoryImportDto {
+): Pick<CreateInventoryImportDto, keyof CreateInventoryImportDto> {
   return {
     clientRequestId: randomUUID(),
     schemaVersion: 1,
@@ -297,7 +297,7 @@ describe('inventory import sessions', () => {
 
     expect(all.total).toBe(total);
     expect(all.items.map((i) => i.id)).toEqual(
-      [...all.items.map((i) => i.id)].sort((a, b) => b - a),
+      all.items.map((i) => i.id).sort((a, b) => b - a),
     );
     expect(own.items.every((i) => i.createdBy.id === northAdmin.user.id)).toBe(
       true,

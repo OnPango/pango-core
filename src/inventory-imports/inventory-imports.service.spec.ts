@@ -36,7 +36,7 @@ const owner: AuthContext = {
   },
 };
 
-const valid: CreateInventoryImportDto = {
+const valid: Pick<CreateInventoryImportDto, keyof CreateInventoryImportDto> = {
   clientRequestId: '6f1c2d4e-8a7b-4c1d-9e2f-3a4b5c6d7e8f',
   schemaVersion: 1,
   fileName: 'inventario.xlsx',

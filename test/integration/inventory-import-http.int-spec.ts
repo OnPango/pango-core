@@ -1,10 +1,7 @@
 // End to end over HTTP: the whole Pango app (guards, pipes, controllers) against
 // the local test database, configured as src/main.ts configures it.
 import { randomUUID } from 'node:crypto';
-import { ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { Test } from '@nestjs/testing';
-import cookieParser from 'cookie-parser';
 import pg from 'pg';
 import request from 'supertest';
 import type { PrismaClient } from '../../src/generated/prisma/tenant/client.js';
@@ -14,6 +11,7 @@ import {
   testDatabaseUrl,
   type TestTenant,
 } from './database.js';
+import { bootApp } from './http-app.js';
 
 const TENANT = 'http-e2e';
 
@@ -31,29 +29,12 @@ describe('inventory import over HTTP', () => {
       .set('X-Tenant', TENANT);
 
   beforeAll(async () => {
-    // The app reads its database from the environment, never Supabase here.
-    process.env.DATABASE_URL = testDatabaseUrl();
-    process.env.DIRECT_URL = testDatabaseUrl();
     tenant = await provisionTenant(TENANT);
     db = tenantClient(tenant.schema);
 
-    const { AppModule } = await import('../../src/app.module.js');
-    const { TokenService } = await import('../../src/auth/token.service.js');
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-    app = moduleRef.createNestApplication<NestExpressApplication>();
-    app.useBodyParser('json', { limit: '1mb' });
-    app.use(cookieParser());
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
-    await app.init();
+    ({ app } = await bootApp());
 
+    const { TokenService } = await import('../../src/auth/token.service.js');
     const tokens = app.get(TokenService);
     ownerToken = await tokens.signAccessToken({
       accountId: tenant.accountId,

@@ -157,7 +157,7 @@ describe('receiving batches of rows', () => {
 
     const retried = await send(owner, id, 1, [...rows(2, 3)].reverse());
 
-    expect(retried).toEqual({ ...first, replayed: true });
+    expect(retried).toEqual({ ...(first as object), replayed: true });
     expect(await db.inventoryImportRow.count({ where: { importId: id } })).toBe(
       4,
     );
@@ -248,7 +248,7 @@ describe('receiving batches of rows', () => {
       'IMPORT_NOT_RECEIVING',
     );
     await expect(send(owner, id, 1, rows(2, 3))).resolves.toEqual({
-      ...first,
+      ...(first as object),
       status: 'READY',
       replayed: true,
     });

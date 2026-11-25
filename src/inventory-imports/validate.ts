@@ -1103,7 +1103,9 @@ function rowSignature(row: ParsedRow): string {
     Object.keys(values)
       .sort()
       .map((key) => {
-        const value = (values as Record<string, unknown>)[key];
+        const value = (
+          values as Record<string, string | boolean | Decimal | undefined>
+        )[key];
         return [key, value === undefined ? null : String(value)];
       }),
   );

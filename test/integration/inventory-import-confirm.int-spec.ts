@@ -19,7 +19,6 @@ import {
   sessionFor,
   tenantClient,
   testDatabaseUrl,
-  type TestTenant,
 } from './database.js';
 
 const config = {
