@@ -1,0 +1,18 @@
+# Throwaway PostgreSQL for integration tests (`pnpm test:int`). Same major version
+# as Supabase; data lives in memory and is lost when the container stops.
+#   docker compose -f docker-compose.test.yml up -d
+#   docker compose -f docker-compose.test.yml down
+name: pango-core-test
+
+services:
+  postgres-test:
+    image: postgres:17-alpine
+    container_name: pango-postgres-test
+    environment:
+      POSTGRES_USER: pango
+      POSTGRES_PASSWORD: pango
+      POSTGRES_DB: pango_test
+    ports:
+      - "127.0.0.1:54329:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
