@@ -1,15 +1,21 @@
 import { createHash } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { AuthContext } from '../auth/auth-context.js';
 import type { Prisma } from '../generated/prisma/tenant/client.js';
-import type { InventoryImportStatus } from '../generated/prisma/tenant/enums.js';
+import type {
+  InventoryImportRowStatus,
+  InventoryImportStatus,
+} from '../generated/prisma/tenant/enums.js';
+import { MovementsService } from '../movements/movements.service.js';
 import { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
 import { checkBatchRows, type RowValues } from './batch.js';
+import { type AppliedPlan, applyPlan, lockDependencies } from './confirm.js';
 import type {
   AppendInventoryRowsDto,
+  ConfirmInventoryImportDto,
   CreateInventoryImportDto,
   ListInventoryImportsQueryDto,
 } from './dto.js';
@@ -22,7 +28,10 @@ import {
   UNIT_ALIASES,
 } from './fields.js';
 import { InventoryImportConfig } from './inventory-import-config.js';
-import { inventoryImportErrors } from './inventory-import-errors.js';
+import {
+  inventoryImportErrors,
+  isRetryable,
+} from './inventory-import-errors.js';
 import { type ImportScope, importScope } from './inventory-import-access.js';
 import { loadLookups } from './lookups.js';
 import { parseRow } from './parse.js';
@@ -34,6 +43,8 @@ import type {
   InventoryImportIssuePageDto,
   InventoryImportPageDto,
   InventoryImportReportDto,
+  InventoryImportRowPageDto,
+  InventoryImportRowPreviewDto,
 } from './responses.js';
 import { type ValidationResult, validateRows } from './validate.js';
 
@@ -102,11 +113,140 @@ export function canSee(
 // in later stages.
 @Injectable()
 export class InventoryImportsService {
+  private readonly logger = new Logger(InventoryImportsService.name);
+
   constructor(
     private readonly tenants: TenantPrismaService,
     private readonly control: ControlPrismaService,
     private readonly config: InventoryImportConfig,
+    private readonly movements: MovementsService,
   ) {}
+
+  /**
+   * Confirms the validated revision: in one transaction, re-validates under
+   * locks, refuses with `IMPORT_STALE` when the outcome differs from the
+   * preview, then creates the plan's entities and records its stock. A
+   * repeated confirmation answers the stored result and writes nothing.
+   */
+  async confirm(
+    auth: AuthContext,
+    id: number,
+    dto: ConfirmInventoryImportDto,
+  ): Promise<InventoryImportDto> {
+    const schema = assertTenantSchema(auth.organization.schemaName);
+    const started = Date.now();
+    let applied: AppliedPlan | undefined;
+    try {
+      await this.tenant(auth).$transaction(
+        async (tx) => {
+          await this.boundWaits(tx, this.config.confirmTimeoutMs);
+          await tx.$executeRawUnsafe(
+            `SELECT pg_advisory_xact_lock(hashtext($1))`,
+            `${schema}:inventory-import-confirm`,
+          );
+          await this.expireStale(tx, schema);
+          const current = await this.lockOwn(tx, schema, auth, id);
+          if (current.status === 'COMPLETED') return;
+          if (!OPEN_STATUSES.includes(current.status)) {
+            throw inventoryImportErrors.closed();
+          }
+          if (current.status !== 'READY') {
+            throw inventoryImportErrors.notReady();
+          }
+          if (current.revision !== dto.revision) {
+            throw inventoryImportErrors.stale();
+          }
+
+          const result = await this.runValidation(tx, schema, auth, id, {
+            lock: true,
+          });
+          if (outcomeFingerprint(result) !== current.validationFingerprint) {
+            throw inventoryImportErrors.stale();
+          }
+          try {
+            applied = await applyPlan(
+              tx,
+              schema,
+              auth,
+              id,
+              result.plan,
+              this.movements,
+            );
+          } catch (error) {
+            // Someone created the same SKU, warehouse or category meanwhile.
+            if (isUniqueViolation(error)) throw inventoryImportErrors.stale();
+            throw error;
+          }
+          const { newWarehouseIds, ...outcome } = applied;
+          const summary = {
+            ...result.summary,
+            warehouseIds: [
+              ...result.summary.warehouseIds,
+              ...newWarehouseIds,
+            ].sort((a, b) => a - b),
+          };
+          await deleteStaged(tx, [id]);
+          const now = new Date();
+          await tx.inventoryImport.update({
+            where: { id },
+            data: {
+              status: 'COMPLETED',
+              result: outcome as unknown as Prisma.InputJsonValue,
+              summary: summary as unknown as Prisma.InputJsonValue,
+              confirmedAt: now,
+              lastActivityAt: now,
+            },
+          });
+        },
+        { timeout: this.config.confirmTimeoutMs, maxWait: 10_000 },
+      );
+    } catch (error) {
+      const code =
+        ((error as { getResponse?: () => { code?: string } }).getResponse?.()
+          ?.code ??
+          (error as Error).name) ||
+        'UNKNOWN';
+      this.logger.warn(
+        `inventory_import_id=${id} confirm failed code=${code} duration_ms=${Date.now() - started}`,
+      );
+      throw isRetryable(error) ? inventoryImportErrors.busy() : error;
+    }
+    if (applied) {
+      this.logger.log(
+        `inventory_import_id=${id} confirmed stock_rows=${applied.stockRows} movements=${applied.movements} duration_ms=${Date.now() - started}`,
+      );
+    }
+    return this.get(auth, id);
+  }
+
+  /**
+   * Makes PostgreSQL itself give up a lock wait or a statement after the
+   * configured time, rolling back and freeing the connection. Prisma's own
+   * transaction timeout does not cancel a statement that is waiting.
+   */
+  private async boundWaits(tx: Tx, ms: number) {
+    await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${ms}`);
+    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${ms}`);
+  }
+
+  /**
+   * Runs an operation and turns a failure that only needs a retry (time limit,
+   * contention, lost connection) into `503 IMPORT_BUSY`. The transaction rolled
+   * back, and every import operation is safe to repeat.
+   */
+  private async retryable<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (isRetryable(error)) {
+        this.logger.warn(
+          `inventory import operation rolled back, retryable: ${retryCause(error)}`,
+        );
+        throw inventoryImportErrors.busy();
+      }
+      throw error;
+    }
+  }
 
   private tenant(auth: AuthContext) {
     return this.tenants.client(auth.organization.schemaName);
@@ -124,6 +264,7 @@ export class InventoryImportsService {
         maxRowsPerImport: this.config.maxRows,
         maxRequestBytes: this.config.maxRequestBytes,
         maxValueChars: this.config.maxValueChars,
+        maxRowChars: this.config.maxRowChars,
         expiryHours: this.config.expiryHours,
       },
       fields: FIELDS.map(toFieldDto),
@@ -140,7 +281,14 @@ export class InventoryImportsService {
    * (`replayed`). One open import per organization; the database enforces it
    * (`inventory_imports_open_key`), so a concurrent loser gets the same answers.
    */
-  async create(
+  create(
+    auth: AuthContext,
+    dto: CreateInventoryImportDto,
+  ): Promise<{ import: InventoryImportDto; replayed: boolean }> {
+    return this.retryable(() => this.createOnce(auth, dto));
+  }
+
+  private async createOnce(
     auth: AuthContext,
     dto: CreateInventoryImportDto,
   ): Promise<{ import: InventoryImportDto; replayed: boolean }> {
@@ -164,31 +312,54 @@ export class InventoryImportsService {
     const tenant = this.tenant(auth);
 
     try {
-      const outcome = await tenant.$transaction(async (tx) => {
-        await this.expireStale(tx, schema);
-        const existing = await this.byRequest(tx, auth, dto.clientRequestId);
-        if (existing) {
-          return {
-            record: replay(existing, requestFingerprint),
-            replayed: true,
-          };
-        }
-        await this.assertNoOpenImport(tx, auth);
-        const record = await tx.inventoryImport.create({
-          data: {
-            clientRequestId: dto.clientRequestId,
-            createdById: auth.user.id,
-            schemaVersion: dto.schemaVersion,
-            fileName: dto.fileName.trim(),
-            sheetName: dto.sheetName.trim(),
-            totalRows: dto.totalRows,
-            mapping: mapping as Prisma.InputJsonValue,
-            requestFingerprint,
-          },
-          include: importInclude,
-        });
-        return { record, replayed: false };
-      });
+      const outcome = await tenant.$transaction(
+        async (tx) => {
+          await this.boundWaits(tx, SHORT_TX_MS);
+          await this.expireStale(tx, schema);
+          // The open import first: if it is this very request (a concurrent
+          // twin committed it a moment ago), it is a replay, not a conflict.
+          const open = await tx.inventoryImport.findFirst({
+            where: { status: { in: OPEN_STATUSES } },
+            include: importInclude,
+          });
+          if (
+            open?.createdById === auth.user.id &&
+            open.clientRequestId === dto.clientRequestId
+          ) {
+            return {
+              record: replay(open, requestFingerprint),
+              replayed: true,
+            };
+          }
+          if (open) {
+            throw inventoryImportErrors.activeExists(
+              open.createdById === auth.user.id ? open.id : undefined,
+            );
+          }
+          const existing = await this.byRequest(tx, auth, dto.clientRequestId);
+          if (existing) {
+            return {
+              record: replay(existing, requestFingerprint),
+              replayed: true,
+            };
+          }
+          const record = await tx.inventoryImport.create({
+            data: {
+              clientRequestId: dto.clientRequestId,
+              createdById: auth.user.id,
+              schemaVersion: dto.schemaVersion,
+              fileName: dto.fileName.trim(),
+              sheetName: dto.sheetName.trim(),
+              totalRows: dto.totalRows,
+              mapping: mapping as Prisma.InputJsonValue,
+              requestFingerprint,
+            },
+            include: importInclude,
+          });
+          return { record, replayed: false };
+        },
+        { timeout: SHORT_TX_MS },
+      );
       return {
         import: (await this.toDtos([outcome.record]))[0],
         replayed: outcome.replayed,
@@ -212,7 +383,15 @@ export class InventoryImportsService {
    * number, or a row number already received, are refused. Batches of one import
    * are stored one at a time (the import's row lock).
    */
-  async appendRows(
+  appendRows(
+    auth: AuthContext,
+    id: number,
+    dto: AppendInventoryRowsDto,
+  ): Promise<AppendInventoryRowsResultDto> {
+    return this.retryable(() => this.appendRowsOnce(auth, id, dto));
+  }
+
+  private async appendRowsOnce(
     auth: AuthContext,
     id: number,
     dto: AppendInventoryRowsDto,
@@ -223,6 +402,7 @@ export class InventoryImportsService {
     const { rows, problems } = checkBatchRows(
       dto.rows,
       this.config.maxValueChars,
+      this.config.maxRowChars,
     );
     if (problems.length > 0) throw inventoryImportErrors.rowsInvalid(problems);
     const payloadHash = fingerprint(
@@ -232,6 +412,7 @@ export class InventoryImportsService {
 
     return this.tenant(auth).$transaction(
       async (tx) => {
+        await this.boundWaits(tx, BATCH_TX_MS);
         await this.expireStale(tx, schema);
         const current = await this.lockOwn(tx, schema, auth, id);
         const now = new Date();
@@ -323,7 +504,7 @@ export class InventoryImportsService {
           replayed: false,
         };
       },
-      { timeout: 60_000 },
+      { timeout: BATCH_TX_MS },
     );
   }
 
@@ -333,13 +514,18 @@ export class InventoryImportsService {
    * issues, the summary and the outcome's fingerprint (compared on
    * confirmation). Nothing definitive is written.
    */
-  async validate(
+  validate(auth: AuthContext, id: number): Promise<InventoryImportReportDto> {
+    return this.retryable(() => this.validateOnce(auth, id));
+  }
+
+  private async validateOnce(
     auth: AuthContext,
     id: number,
   ): Promise<InventoryImportReportDto> {
     const schema = assertTenantSchema(auth.organization.schemaName);
     await this.tenant(auth).$transaction(
       async (tx) => {
+        await this.boundWaits(tx, VALIDATE_TX_MS);
         await this.expireStale(tx, schema);
         const current = await this.lockOwn(tx, schema, auth, id);
         if (!OPEN_STATUSES.includes(current.status)) {
@@ -364,7 +550,7 @@ export class InventoryImportsService {
           },
         });
       },
-      { timeout: 120_000 },
+      { timeout: VALIDATE_TX_MS },
     );
     return {
       import: await this.get(auth, id),
@@ -372,12 +558,17 @@ export class InventoryImportsService {
     };
   }
 
-  /** Parses the staged rows and applies every rule, reading inside `tx`. */
+  /**
+   * Parses the staged rows and applies every rule, reading inside `tx`. With
+   * `lock`, first locks what the rows depend on (the confirmation), so nothing
+   * it read can change before it writes.
+   */
   async runValidation(
     tx: Tx,
     schema: string,
     auth: AuthContext,
     id: number,
+    options: { lock?: boolean } = {},
   ): Promise<ValidationResult> {
     const stored = await tx.inventoryImportRow.findMany({
       where: { importId: id },
@@ -387,6 +578,13 @@ export class InventoryImportsService {
     const parsed = stored.map((r) =>
       parseRow(r.rowNumber, r.values as RowValues),
     );
+    if (options.lock) {
+      await lockDependencies(
+        tx,
+        schema,
+        parsed.map((p) => p.row),
+      );
+    }
     const lookups = await loadLookups(
       tx,
       schema,
@@ -471,6 +669,7 @@ export class InventoryImportsService {
     ]);
     const mapping = record.mapping as ColumnMapping;
     return {
+      revision: record.revision,
       items: items.map((issue) => ({
         rowNumber: issue.rowNumber,
         field: issue.field,
@@ -487,6 +686,57 @@ export class InventoryImportsService {
     };
   }
 
+  /**
+   * A page of the rows as the last validation resolved them, by row number.
+   * Before any validation the rows are `PENDING` with only their SKU; once the
+   * import closes, its staged rows are gone and the page is empty.
+   */
+  async rowPage(
+    auth: AuthContext,
+    id: number,
+    query: {
+      page?: number;
+      pageSize?: number;
+      status?: InventoryImportRowStatus;
+    },
+  ): Promise<InventoryImportRowPageDto> {
+    const record = await this.readable(auth, id);
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 25;
+    const where: Prisma.InventoryImportRowWhereInput = {
+      importId: id,
+      ...(query.status && { status: query.status }),
+    };
+    const tenant = this.tenant(auth);
+    const [total, rows] = await Promise.all([
+      tenant.inventoryImportRow.count({ where }),
+      tenant.inventoryImportRow.findMany({
+        where,
+        orderBy: { rowNumber: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          rowNumber: true,
+          status: true,
+          values: true,
+          preview: true,
+          issueCount: true,
+        },
+      }),
+    ]);
+    return {
+      revision: record.revision,
+      items: rows.map((row) =>
+        row.preview
+          ? (row.preview as unknown as InventoryImportRowPreviewDto)
+          : pendingPreview(row.rowNumber, row.values as RowValues),
+      ),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
   async get(auth: AuthContext, id: number): Promise<InventoryImportDto> {
     const record = await this.readable(auth, id);
     return (await this.toDtos([record]))[0];
@@ -496,20 +746,32 @@ export class InventoryImportsService {
    * Cancels an open import and deletes its staged data. Cancelling a cancelled
    * or expired import answers it as it is; a completed one cannot be cancelled.
    */
-  async cancel(auth: AuthContext, id: number): Promise<InventoryImportDto> {
+  cancel(auth: AuthContext, id: number): Promise<InventoryImportDto> {
+    return this.retryable(() => this.cancelOnce(auth, id));
+  }
+
+  private async cancelOnce(
+    auth: AuthContext,
+    id: number,
+  ): Promise<InventoryImportDto> {
     const schema = assertTenantSchema(auth.organization.schemaName);
-    const record = await this.tenant(auth).$transaction(async (tx) => {
-      await this.expireStale(tx, schema);
-      const current = await this.lockOwn(tx, schema, auth, id);
-      if (current.status === 'COMPLETED') throw inventoryImportErrors.closed();
-      if (!OPEN_STATUSES.includes(current.status)) return current;
-      await deleteStaged(tx, [id]);
-      return tx.inventoryImport.update({
-        where: { id },
-        data: { status: 'CANCELLED', lastActivityAt: new Date() },
-        include: importInclude,
-      });
-    });
+    const record = await this.tenant(auth).$transaction(
+      async (tx) => {
+        await this.boundWaits(tx, SHORT_TX_MS);
+        await this.expireStale(tx, schema);
+        const current = await this.lockOwn(tx, schema, auth, id);
+        if (current.status === 'COMPLETED')
+          throw inventoryImportErrors.closed();
+        if (!OPEN_STATUSES.includes(current.status)) return current;
+        await deleteStaged(tx, [id]);
+        return tx.inventoryImport.update({
+          where: { id },
+          data: { status: 'CANCELLED', lastActivityAt: new Date() },
+          include: importInclude,
+        });
+      },
+      { timeout: SHORT_TX_MS },
+    );
     return (await this.toDtos([record]))[0];
   }
 
@@ -692,6 +954,41 @@ function replay(record: ImportRecord, requestFingerprint: string) {
   }
   return record;
 }
+
+/** A row not validated yet: only what it says, nothing resolved. */
+function pendingPreview(
+  rowNumber: number,
+  values: RowValues,
+): InventoryImportRowPreviewDto {
+  return {
+    rowNumber,
+    status: 'PENDING',
+    sku: values.sku?.trim() || null,
+    product: null,
+    category: null,
+    warehouse: null,
+    locationCode: null,
+    lot: null,
+    stockUnit: null,
+    quantity: null,
+    unitCost: null,
+    issues: 0,
+  };
+}
+
+/** A short, safe description of a retryable failure, for the logs. */
+function retryCause(error: unknown): string {
+  const known = error as {
+    code?: string;
+    meta?: { driverAdapterError?: { cause?: { code?: string } } };
+  };
+  return known.meta?.driverAdapterError?.cause?.code ?? known.code ?? 'unknown';
+}
+
+/** Time limits of the import's transactions (and of their lock waits). */
+const SHORT_TX_MS = 10_000;
+const BATCH_TX_MS = 60_000;
+const VALIDATE_TX_MS = 120_000;
 
 /** Rows written per statement when storing a validation. */
 const STORE_CHUNK = 1000;

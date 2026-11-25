@@ -73,6 +73,7 @@ function service() {
       { client } as never,
       {} as never,
       config,
+      {} as never,
     ),
   };
 }
@@ -127,10 +128,13 @@ describe('InventoryImportsController', () => {
     expect(handlers.sort()).toEqual([
       'appendRows',
       'cancel',
+      'confirm',
       'create',
       'fields',
       'get',
+      'issues',
       'list',
+      'previewRows',
       'validate',
     ]);
     for (const name of handlers) {

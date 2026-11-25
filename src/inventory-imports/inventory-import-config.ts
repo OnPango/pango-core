@@ -21,6 +21,11 @@ export class InventoryImportConfig {
   readonly maxRequestBytes = MAX_REQUEST_BYTES;
   /** Characters of one value as sent. */
   readonly maxValueChars = 2000;
+  /**
+   * Characters of all the values of one row. A real row fits (a 2,000-character
+   * description plus every other field); it bounds what an import can stage.
+   */
+  readonly maxRowChars = 4096;
   /** Issues stored per validation (all are counted). */
   readonly maxStoredIssues = 10_000;
 

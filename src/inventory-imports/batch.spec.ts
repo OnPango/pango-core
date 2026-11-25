@@ -11,6 +11,7 @@ describe('checkBatchRows', () => {
     const { rows, problems } = checkBatchRows(
       [row(2), row(3, { unitCost: null, lotCode: '' })],
       2000,
+      4096,
     );
     expect(problems).toEqual([]);
     expect(rows).toEqual([
@@ -31,6 +32,7 @@ describe('checkBatchRows', () => {
     const { problems } = checkBatchRows(
       [row(2, { stockQuantity: 'abc', tracksLots: 'quizás' })],
       2000,
+      4096,
     );
     expect(problems).toEqual([]);
   });
@@ -54,6 +56,7 @@ describe('checkBatchRows', () => {
         row(10),
       ],
       10,
+      4096,
     );
     expect(problems).toEqual([
       'rows[0]: must be { rowNumber, values }',
@@ -71,15 +74,40 @@ describe('checkBatchRows', () => {
   });
 });
 
+describe('checkBatchRows: row size', () => {
+  it('refuses a row whose values add up to more than the row limit', () => {
+    const big = {
+      sku: 'S',
+      name: 'x'.repeat(150),
+      description: 'd'.repeat(2000),
+    };
+    expect(checkBatchRows([row(2, big)], 2000, 4096).problems).toEqual([]);
+    expect(
+      checkBatchRows(
+        [
+          row(2, {
+            ...big,
+            warehouseAddress: 'a'.repeat(200),
+            category: 'c'.repeat(1900),
+          }),
+        ],
+        2000,
+        4096,
+      ).problems,
+    ).toEqual(['rows[0]: the values add up to more than 4096 characters']);
+  });
+});
+
 describe('batch fingerprint', () => {
   it('is the same for the same rows in another order or key order', () => {
-    const a = checkBatchRows([row(2), row(3)], 2000).rows;
+    const a = checkBatchRows([row(2), row(3)], 2000, 4096).rows;
     const b = checkBatchRows(
       [
         { rowNumber: 3, values: { stockQuantity: '5', sku: 'TOR-001' } },
         { rowNumber: 2, values: { stockQuantity: '5', sku: 'TOR-001' } },
       ],
       2000,
+      4096,
     ).rows;
     const sorted = (rows: typeof a) =>
       [...rows].sort((x, y) => x.rowNumber - y.rowNumber);
@@ -87,6 +115,7 @@ describe('batch fingerprint', () => {
     const changed = checkBatchRows(
       [row(2), row(3, { stockQuantity: '6' })],
       2000,
+      4096,
     ).rows;
     expect(fingerprint(sorted(changed))).not.toBe(fingerprint(sorted(a)));
   });

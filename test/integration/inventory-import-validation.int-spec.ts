@@ -56,6 +56,7 @@ describe('validating an inventory import against the database', () => {
     tenants,
     control,
     new InventoryImportConfig(config),
+    new MovementsService(control, tenants),
   );
   const movements = new MovementsService({} as never, {} as never);
   let tenant: TestTenant;

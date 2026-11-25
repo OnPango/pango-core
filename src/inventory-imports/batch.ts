@@ -19,7 +19,11 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   Object.getPrototypeOf(value) === Object.prototype;
 
 /** Why one sent row is not a row, or null when its shape is right. */
-function rowProblem(row: unknown, maxValueChars: number): string | null {
+function rowProblem(
+  row: unknown,
+  maxValueChars: number,
+  maxRowChars: number,
+): string | null {
   if (!isPlainObject(row)) return 'must be { rowNumber, values }';
   const extra = Object.keys(row).filter(
     (k) => k !== 'rowNumber' && k !== 'values',
@@ -34,6 +38,7 @@ function rowProblem(row: unknown, maxValueChars: number): string | null {
     return 'rowNumber must be an integer from 2 (row 1 is the header)';
   }
   if (!isPlainObject(values)) return 'values must be an object';
+  let total = 0;
   for (const key of Object.keys(values)) {
     if (!FIELD_KEYS.has(key))
       return `values.${key} is not a field of the template`;
@@ -44,6 +49,10 @@ function rowProblem(row: unknown, maxValueChars: number): string | null {
     if (typeof value === 'string' && value.length > maxValueChars) {
       return `values.${key} is longer than ${maxValueChars} characters`;
     }
+    total += typeof value === 'string' ? value.length : 0;
+  }
+  if (total > maxRowChars) {
+    return `the values add up to more than ${maxRowChars} characters`;
   }
   return null;
 }
@@ -55,12 +64,13 @@ function rowProblem(row: unknown, maxValueChars: number): string | null {
 export function checkBatchRows(
   sent: unknown[],
   maxValueChars: number,
+  maxRowChars: number,
 ): { rows: IncomingRow[]; problems: string[] } {
   const rows: IncomingRow[] = [];
   const problems: string[] = [];
   const seen = new Set<number>();
   sent.forEach((row, index) => {
-    const problem = rowProblem(row, maxValueChars);
+    const problem = rowProblem(row, maxValueChars, maxRowChars);
     if (problem) {
       problems.push(`rows[${index}]: ${problem}`);
       return;

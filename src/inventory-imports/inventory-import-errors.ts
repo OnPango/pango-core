@@ -82,6 +82,24 @@ export const inventoryImportErrors = {
       `Send every row before validating: ${receivedRows} of ${totalRows} received`,
       { receivedRows, totalRows },
     ),
+  notReady: () =>
+    apiError(
+      HttpStatus.CONFLICT,
+      'IMPORT_NOT_READY',
+      'Only a validated import without errors can be confirmed',
+    ),
+  stale: () =>
+    apiError(
+      HttpStatus.CONFLICT,
+      'IMPORT_STALE',
+      'Something the preview depends on changed since it was validated; validate again',
+    ),
+  busy: () =>
+    apiError(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      'IMPORT_BUSY',
+      'The import could not finish (time limit, conflict or lost connection); nothing was saved. Try again',
+    ),
   closed: () =>
     apiError(
       HttpStatus.CONFLICT,
@@ -89,3 +107,44 @@ export const inventoryImportErrors = {
       'The import is closed (completed, cancelled or expired)',
     ),
 };
+
+/** Prisma: transaction timed out or closed; write conflict or deadlock. */
+const RETRYABLE_PRISMA_CODES = new Set(['P2028', 'P2034']);
+
+/**
+ * PostgreSQL: statement or lock wait cancelled (`lock_timeout`,
+ * `statement_timeout`), deadlock, serialization failure, connection
+ * terminated or lost.
+ */
+const RETRYABLE_SQLSTATES = new Set([
+  '57014',
+  '55P03',
+  '40P01',
+  '40001',
+  '57P01',
+  '57P02',
+  '57P03',
+  '08000',
+  '08003',
+  '08006',
+]);
+
+/**
+ * Whether a failed transaction can simply be retried: it rolled back for a
+ * reason unrelated to the request (time, contention or connection), and every
+ * import operation is safe to repeat.
+ */
+export function isRetryable(error: unknown): boolean {
+  const known = error as {
+    code?: unknown;
+    meta?: { driverAdapterError?: { cause?: { code?: unknown } } };
+  } | null;
+  if (
+    typeof known?.code === 'string' &&
+    RETRYABLE_PRISMA_CODES.has(known.code)
+  ) {
+    return true;
+  }
+  const sqlState = known?.meta?.driverAdapterError?.cause?.code;
+  return typeof sqlState === 'string' && RETRYABLE_SQLSTATES.has(sqlState);
+}

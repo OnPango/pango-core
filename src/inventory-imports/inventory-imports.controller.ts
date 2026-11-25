@@ -23,7 +23,10 @@ import { CurrentAuth, RequirePermissions } from '../auth/decorators.js';
 import { ApiSession, requiresPermissions } from '../swagger/api-docs.js';
 import {
   AppendInventoryRowsDto,
+  ConfirmInventoryImportDto,
   CreateInventoryImportDto,
+  ListInventoryImportIssuesQueryDto,
+  ListInventoryImportRowsQueryDto,
   ListInventoryImportsQueryDto,
 } from './dto.js';
 import { INVENTORY_IMPORT } from './inventory-import-access.js';
@@ -32,8 +35,10 @@ import {
   AppendInventoryRowsResultDto,
   InventoryImportDto,
   InventoryImportFieldsDto,
+  InventoryImportIssuePageDto,
   InventoryImportPageDto,
   InventoryImportReportDto,
+  InventoryImportRowPageDto,
 } from './responses.js';
 
 const OWN =
@@ -194,6 +199,91 @@ export class InventoryImportsController {
     @Param('id', ParseIntPipe) id: number,
   ) {
     return this.imports.validate(auth, id);
+  }
+
+  @Get(':id/rows')
+  @RequirePermissions(INVENTORY_IMPORT)
+  @ApiOperation({
+    summary: 'Preview rows of an inventory import',
+    description:
+      'The rows as the last validation resolved them (entities, whether they ' +
+      'would be created, location, lot, unit, quantity, cost), by row number. ' +
+      '`PENDING` with only the SKU before validation; empty once the import ' +
+      `closes. ${VISIBLE} ${requiresPermissions(INVENTORY_IMPORT)}`,
+  })
+  @ApiParam({ name: 'id', type: Number, example: 15 })
+  @ApiOkResponse({ type: InventoryImportRowPageDto })
+  @ApiSession({
+    permissions: [INVENTORY_IMPORT],
+    validation: true,
+    errors: { [HttpStatus.NOT_FOUND]: ['IMPORT_NOT_FOUND'] },
+  })
+  previewRows(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: ListInventoryImportRowsQueryDto,
+  ) {
+    return this.imports.rowPage(auth, id, query);
+  }
+
+  @Get(':id/issues')
+  @RequirePermissions(INVENTORY_IMPORT)
+  @ApiOperation({
+    summary: 'Errors and warnings of an inventory import',
+    description:
+      'The issues of the last validation, by row, with the source column of ' +
+      'each field. All are counted; the first 10,000 are listed. ' +
+      `${VISIBLE} ${requiresPermissions(INVENTORY_IMPORT)}`,
+  })
+  @ApiParam({ name: 'id', type: Number, example: 15 })
+  @ApiOkResponse({ type: InventoryImportIssuePageDto })
+  @ApiSession({
+    permissions: [INVENTORY_IMPORT],
+    validation: true,
+    errors: { [HttpStatus.NOT_FOUND]: ['IMPORT_NOT_FOUND'] },
+  })
+  issues(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: ListInventoryImportIssuesQueryDto,
+  ) {
+    return this.imports.issuePage(auth, id, query);
+  }
+
+  @Post(':id/confirm')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions(INVENTORY_IMPORT)
+  @ApiOperation({
+    summary: 'Confirm the validated revision',
+    description:
+      'Writes everything in one transaction, or nothing: re-validates under ' +
+      'locks, then creates the new categories, warehouses (with the creator ' +
+      'assigned), products and lots and records the stock as "Opening balance" ' +
+      'movements. Answers the import with its `result`; a repeated confirmation ' +
+      'answers the same result. `409 IMPORT_STALE` when the revision is not the ' +
+      `last one or something changed: validate again. ${OWN} ${requiresPermissions(INVENTORY_IMPORT)}`,
+  })
+  @ApiParam({ name: 'id', type: Number, example: 15 })
+  @ApiOkResponse({ type: InventoryImportDto })
+  @ApiSession({
+    permissions: [INVENTORY_IMPORT],
+    validation: true,
+    errors: {
+      [HttpStatus.FORBIDDEN]: ['IMPORT_NOT_YOURS'],
+      [HttpStatus.NOT_FOUND]: ['IMPORT_NOT_FOUND'],
+      [HttpStatus.CONFLICT]: [
+        'IMPORT_NOT_READY',
+        'IMPORT_STALE',
+        'IMPORT_CLOSED',
+      ],
+    },
+  })
+  confirm(
+    @CurrentAuth() auth: AuthContext,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ConfirmInventoryImportDto,
+  ) {
+    return this.imports.confirm(auth, id, dto);
   }
 
   @Post(':id/cancel')

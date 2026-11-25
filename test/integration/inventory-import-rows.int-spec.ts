@@ -6,6 +6,7 @@ import type { PrismaClient } from '../../src/generated/prisma/tenant/client.js';
 import type { AppendInventoryRowsDto } from '../../src/inventory-imports/dto.js';
 import { InventoryImportConfig } from '../../src/inventory-imports/inventory-import-config.js';
 import { InventoryImportsService } from '../../src/inventory-imports/inventory-imports.service.js';
+import { MovementsService } from '../../src/movements/movements.service.js';
 import { ControlPrismaService } from '../../src/prisma/control-prisma.service.js';
 import { TenantPrismaService } from '../../src/prisma/tenant-prisma.service.js';
 import {
@@ -67,6 +68,7 @@ describe('receiving batches of rows', () => {
     tenants,
     control,
     new InventoryImportConfig(config),
+    new MovementsService(control, tenants),
   );
   let tenant: TestTenant;
   let db: PrismaClient;
@@ -280,6 +282,7 @@ describe('receiving batches of rows', () => {
       tenants,
       control,
       new InventoryImportConfig(small),
+      new MovementsService(control, tenants),
     );
     const id = await start(10);
 

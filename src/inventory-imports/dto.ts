@@ -9,11 +9,16 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
 import { PageQueryDto } from '../forecasting/dto.js';
-import { InventoryImportStatus } from '../generated/prisma/tenant/enums.js';
+import {
+  InventoryImportIssueSeverity,
+  InventoryImportRowStatus,
+  InventoryImportStatus,
+} from '../generated/prisma/tenant/enums.js';
 
 export class CreateInventoryImportDto {
   @ApiProperty({
@@ -148,4 +153,40 @@ export class AppendInventoryRowsDto {
   @IsArray()
   @ArrayMinSize(1)
   rows: unknown[];
+}
+
+export class ListInventoryImportRowsQueryDto extends PageQueryDto {
+  @ApiPropertyOptional({
+    enum: InventoryImportRowStatus,
+    enumName: 'InventoryImportRowStatus',
+    description: 'PENDING until the import is validated',
+  })
+  @IsOptional()
+  @IsEnum(InventoryImportRowStatus)
+  status?: InventoryImportRowStatus;
+}
+
+export class ListInventoryImportIssuesQueryDto extends PageQueryDto {
+  @ApiPropertyOptional({
+    enum: InventoryImportIssueSeverity,
+    enumName: 'InventoryImportIssueSeverity',
+  })
+  @IsOptional()
+  @IsEnum(InventoryImportIssueSeverity)
+  severity?: InventoryImportIssueSeverity;
+
+  @ApiPropertyOptional({ example: 'COST_MISSING' })
+  @IsOptional()
+  @Matches(/^[A-Z_]{1,40}$/)
+  code?: string;
+}
+
+export class ConfirmInventoryImportDto {
+  @ApiProperty({
+    example: 1,
+    description: 'The revision of the validation the user reviewed',
+  })
+  @IsInt()
+  @Min(1)
+  revision: number;
 }

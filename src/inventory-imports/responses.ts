@@ -106,6 +106,12 @@ export class InventoryImportLimitsDto {
   maxValueChars: number;
 
   @ApiProperty({
+    example: 4096,
+    description: 'Characters of all the values of one row',
+  })
+  maxRowChars: number;
+
+  @ApiProperty({
     example: 24,
     description: 'Hours without activity before an open import expires',
   })
@@ -264,6 +270,13 @@ export class InventoryImportIssueDto {
 }
 
 export class InventoryImportIssuePageDto {
+  @ApiProperty({
+    example: 1,
+    description:
+      'Revision of the validation these issues come from (0 before any)',
+  })
+  revision: number;
+
   @ApiProperty({ type: [InventoryImportIssueDto] })
   items: InventoryImportIssueDto[];
 
@@ -286,4 +299,103 @@ export class InventoryImportReportDto {
     description: 'The first page of issues, by row',
   })
   issues: InventoryImportIssuePageDto;
+}
+
+export class PreviewEntityDto {
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 31,
+    description: 'Null when the confirmation would create it',
+  })
+  id: number | null;
+
+  @ApiProperty({ type: String, nullable: true, example: 'Tornillo' })
+  name: string | null;
+
+  @ApiProperty({ example: false })
+  isNew: boolean;
+}
+
+export class PreviewWarehouseDto extends PreviewEntityDto {
+  @ApiProperty({ type: String, nullable: true, example: 'PRINCIPAL' })
+  code: string | null;
+}
+
+export class PreviewLotDto {
+  @ApiProperty({ type: Number, nullable: true, example: null })
+  id: number | null;
+
+  @ApiProperty({ example: 'L-2026-11' })
+  code: string;
+
+  @ApiProperty({ example: true })
+  isNew: boolean;
+}
+
+export class InventoryImportRowPreviewDto {
+  @ApiProperty({ example: 2 })
+  rowNumber: number;
+
+  @ApiProperty({
+    enum: ['PENDING', 'VALID', 'INVALID', 'DUPLICATE'],
+    example: 'VALID',
+  })
+  status: 'PENDING' | 'VALID' | 'INVALID' | 'DUPLICATE';
+
+  @ApiProperty({ type: String, nullable: true, example: 'TOR-001' })
+  sku: string | null;
+
+  @ApiProperty({ type: PreviewEntityDto, nullable: true })
+  product: PreviewEntityDto | null;
+
+  @ApiProperty({ type: PreviewEntityDto, nullable: true })
+  category: PreviewEntityDto | null;
+
+  @ApiProperty({ type: PreviewWarehouseDto, nullable: true })
+  warehouse: PreviewWarehouseDto | null;
+
+  @ApiProperty({ type: String, nullable: true, example: 'DEFAULT' })
+  locationCode: string | null;
+
+  @ApiProperty({ type: PreviewLotDto, nullable: true })
+  lot: PreviewLotDto | null;
+
+  @ApiProperty({ type: String, nullable: true, example: 'EA' })
+  stockUnit: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '500',
+    description: 'Exact digits, as text',
+  })
+  quantity: string | null;
+
+  @ApiProperty({ type: String, nullable: true, example: '350' })
+  unitCost: string | null;
+
+  @ApiProperty({ example: 0, description: 'Errors and warnings of the row' })
+  issues: number;
+}
+
+export class InventoryImportRowPageDto {
+  @ApiProperty({
+    example: 1,
+    description:
+      'Revision of the validation this preview comes from (0 before any)',
+  })
+  revision: number;
+
+  @ApiProperty({ type: [InventoryImportRowPreviewDto] })
+  items: InventoryImportRowPreviewDto[];
+
+  @ApiProperty({ example: 4800 })
+  total: number;
+
+  @ApiProperty({ example: 1 })
+  page: number;
+
+  @ApiProperty({ example: 25 })
+  pageSize: number;
 }

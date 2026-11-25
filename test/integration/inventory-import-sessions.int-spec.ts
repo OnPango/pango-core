@@ -6,6 +6,7 @@ import type { PrismaClient } from '../../src/generated/prisma/tenant/client.js';
 import type { CreateInventoryImportDto } from '../../src/inventory-imports/dto.js';
 import { InventoryImportConfig } from '../../src/inventory-imports/inventory-import-config.js';
 import { InventoryImportsService } from '../../src/inventory-imports/inventory-imports.service.js';
+import { MovementsService } from '../../src/movements/movements.service.js';
 import { ControlPrismaService } from '../../src/prisma/control-prisma.service.js';
 import { TenantPrismaService } from '../../src/prisma/tenant-prisma.service.js';
 import {
@@ -64,6 +65,7 @@ describe('inventory import sessions', () => {
     tenants,
     control,
     new InventoryImportConfig(config),
+    new MovementsService(control, tenants),
   );
   let tenant: TestTenant;
   let db: PrismaClient;
@@ -103,6 +105,7 @@ describe('inventory import sessions', () => {
       maxRowsPerImport: 5000,
       maxRequestBytes: 1048576,
       maxValueChars: 2000,
+      maxRowChars: 4096,
       expiryHours: 24,
     });
     expect(fields.units.map((u) => u.code)).toEqual([
