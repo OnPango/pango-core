@@ -221,15 +221,32 @@ returns the basic application response, and Swagger is available at
 
 ## Docker
 
-Build and start the API:
+With `.env` in place (copied from `.env.example`), create the shared network
+once and start the API:
 
 ```bash
-docker compose up --build
+docker network create pango  # once per machine
+docker compose up            # add --build after changing the code
 ```
 
-The container exposes port `3000`. Database credentials and application
-configuration still come from the environment; the Compose file does not run
-a local PostgreSQL container.
+- The configuration comes from `.env` (`env_file`); it is never copied into the
+  image. Compose does not notice edits to `.env`: apply them with
+  `docker compose up -d --force-recreate`. The database is the Supabase
+  project it points to: no PostgreSQL container runs.
+- The API listens on port `3000` inside the container and on `ERP_PORT`
+  (default `3000`) on the host. A health check calls `GET /`.
+- The image runs with `NODE_ENV=production` (Swagger off unless
+  `SWAGGER_ENABLED=true`, secure cookies unless `COOKIE_SECURE=false`). Set
+  `NODE_ENV=development` in the shell or `.env` to change it.
+- The forecasting service container joins the external `pango` network
+  (`docker run --network pango --name pango-prediction …`, or
+  `docker network connect pango pango-prediction`), and the API reaches it by
+  name: `FORECAST_SERVICE_URL=http://pango-prediction:8000`. A service running
+  directly on the host is reached through `host.docker.internal` instead.
+- The network only exists for local containers: Railway does not read this
+  file, and its services talk over Railway's private network.
+- Migrations are not run on start. Apply them from the host with
+  `pnpm db:migrate:control` and `pnpm tenant:migrate`.
 
 ## API overview
 

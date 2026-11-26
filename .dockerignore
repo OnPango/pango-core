@@ -1,11 +1,21 @@
+# Rebuilt inside the image
 node_modules
 dist
-test
-*.log
-*.env
-*.git
+src/generated
+
+# Secrets: configuration comes from the environment at run time
+.env
+.env.*
+
+# Not needed to build or run the API
+.git
 .gitignore
+.claude
+coverage
+test
+docs
 *.md
+*.log
 Dockerfile
 .dockerignore
 docker-compose.yml
