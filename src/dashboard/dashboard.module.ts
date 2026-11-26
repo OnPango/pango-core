@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { DashboardAlertsService } from './dashboard-alerts.service.js';
+import { DashboardImportedLevelService } from './dashboard-imported-level.service.js';
 import { DashboardInventoryService } from './dashboard-inventory.service.js';
 import { DashboardLevelService } from './dashboard-level.service.js';
 import { DashboardSummaryService } from './dashboard-summary.service.js';
@@ -12,6 +13,7 @@ import { DashboardController } from './dashboard.controller.js';
     DashboardSummaryService,
     DashboardInventoryService,
     DashboardLevelService,
+    DashboardImportedLevelService,
     DashboardAlertsService,
   ],
 })

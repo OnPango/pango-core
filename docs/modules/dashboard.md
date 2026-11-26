@@ -10,6 +10,7 @@ Every endpoint takes `warehouseId` (optional). Without it, each figure covers th
 |---|---|---|
 | `GET /dashboard/summary?warehouseId=` | Any member; each block needs its own permission | Key figures with their value one month earlier, the alerts in force and the latest movements. A block the user cannot read is `null`. |
 | `GET /dashboard/inventory-level?warehouseId=&days=` | `stock.read` (low stock also `alert.read`) | Products with stock and in low stock at the end of each day (`days` 7 or 30) or week (90). |
+| `GET /dashboard/imported-inventory-level?warehouseId=&days=` | `stock.read` (low stock also `alert.read`) | The same periods from the imported history (CU-17), for the product-warehouses not yet moving in Pango. Shown apart from Pango's level. |
 | `GET /dashboard/inventory?warehouseId=` | `stock.read` | Value per top-level category, excess, idle stock and expiring lots. |
 | `GET /dashboard/alerts?warehouseId=&months=` | `alert.read` | Alerts in force per warehouse and severity, and the monthly trend (`months` 1–12, default 6, current month included). |
 
@@ -36,6 +37,18 @@ One point per local day (`days` 7 or 30) or per week, Monday to Sunday (`days` 9
 Each product counts once across the warehouses (or in the one asked for).
 
 Past on hand is today's on hand minus the net movements after the period: a destination adds (a received transfer, what it received), an origin removes (a transfer in transit already left).
+
+### From the imported history
+
+`GET /dashboard/imported-inventory-level` gives the same periods and fields, counted from the imported history ([`movement-imports.md`](movement-imports.md)) instead of Pango's stock, so the dashboard can show the weeks before Pango and label them as imported:
+
+- A product-warehouse counts with its imported closing at the end of the period: the computed running balance of the last line of the latest day on or before it (with several imports, the latest one's), as the forecast input reads it. Before its first imported balance it does not count.
+- It counts only before its first Pango movement there (the cutover of [`movement-imports.md`](movement-imports.md#how-the-history-is-used)). A product-warehouse that never moved in Pango is cut over when its warehouse started in Pango (its first movement there): from then on its Pango figures (no stock, its alerts) are the current ones. From the cutover on `inventory-level` counts it, so a product-warehouse is never counted by both.
+- Only the closings inside the periods are read, plus each product-warehouse's last one before them.
+- `lowStock`: products whose closing is at or below today's reorder point of the product-warehouse (when it is above 0), since the history has no alerts; null without `alert.read`. `inStock` leaves them out, as in Pango's level.
+- `lastImportedDay`: the latest business date of the history in the warehouses read, or null when nothing was imported.
+
+The two endpoints count different product-warehouses, but a product can appear in both in the same period when one of its warehouses has started in Pango and another has not.
 
 ## Inventory
 
