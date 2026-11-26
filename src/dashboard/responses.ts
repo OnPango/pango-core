@@ -205,6 +205,14 @@ export class DashboardLevelDto {
   points: LevelPointDto[];
 }
 
+export class ImportedLevelDto extends DashboardLevelDto {
+  @nullable(
+    String,
+    'Latest business date of the imported history in the warehouses read; null when nothing was imported',
+  )
+  lastImportedDay: string | null;
+}
+
 // ─── Inventory ────────────────────────────────────────────────────────────────
 
 export class FamilyValueDto {

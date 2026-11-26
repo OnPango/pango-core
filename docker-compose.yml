@@ -1,3 +1,6 @@
+# Starts the API with `docker compose up` (add --build after code changes).
+# Configuration comes from .env (copy .env.example); the database is the
+# Supabase project it points to, so no database container runs here.
 name: pango-core
 
 services:
@@ -6,5 +9,30 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: pango-core-api
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # Inside the container the API always listens on 3000; ERP_PORT is the host port.
+      PORT: '3000'
+      NODE_ENV: ${NODE_ENV:-production}
     ports:
-      - "3000:3000"
+      - '${ERP_PORT:-3000}:3000'
+    # Lets the API reach services on the host, e.g. the forecasting service:
+    # FORECAST_SERVICE_URL=http://host.docker.internal:8000
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    networks:
+      - default
+      - pango
+    restart: unless-stopped
+
+networks:
+  # Shared with the forecasting service container, which joins it with
+  # `docker network connect pango pango-prediction`; the API then reaches it
+  # at FORECAST_SERVICE_URL=http://pango-prediction:8000.
+  # Create it once with `docker network create pango`.
+  pango:
+    name: pango
+    external: true

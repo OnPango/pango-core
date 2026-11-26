@@ -4,6 +4,7 @@ import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentAuth, RequirePermissions } from '../auth/decorators.js';
 import { ApiSession, requiresPermissions } from '../swagger/api-docs.js';
 import { DashboardAlertsService } from './dashboard-alerts.service.js';
+import { DashboardImportedLevelService } from './dashboard-imported-level.service.js';
 import { DashboardInventoryService } from './dashboard-inventory.service.js';
 import { DashboardLevelService } from './dashboard-level.service.js';
 import { DashboardSummaryService } from './dashboard-summary.service.js';
@@ -17,6 +18,7 @@ import {
   DashboardInventoryDto,
   DashboardLevelDto,
   DashboardSummaryDto,
+  ImportedLevelDto,
 } from './responses.js';
 
 const scope =
@@ -30,6 +32,7 @@ export class DashboardController {
     private readonly summaryService: DashboardSummaryService,
     private readonly inventoryService: DashboardInventoryService,
     private readonly levelService: DashboardLevelService,
+    private readonly importedLevelService: DashboardImportedLevelService,
     private readonly alertsService: DashboardAlertsService,
   ) {}
 
@@ -64,6 +67,28 @@ export class DashboardController {
     @Query() query: DashboardLevelQueryDto,
   ) {
     return this.levelService.level(auth, query);
+  }
+
+  @Get('imported-inventory-level')
+  @RequirePermissions('stock.read')
+  @ApiOperation({
+    summary: 'Dashboard inventory level from the imported history',
+    description:
+      'The periods of `inventory-level`, counted from the imported history ' +
+      '(CU-17): per period, products with stock and, with `alert.read`, at or ' +
+      "below today's reorder point, from the file's closing balance (the last " +
+      'line of each day, latest import). A product-warehouse counts only before ' +
+      'its first Pango movement, from which `inventory-level` counts it. Shown ' +
+      `apart from Pango's figures. ${scope} ` +
+      requiresPermissions('stock.read'),
+  })
+  @ApiOkResponse({ type: ImportedLevelDto })
+  @ApiSession({ permissions: ['stock.read'], validation: true })
+  importedLevel(
+    @CurrentAuth() auth: AuthContext,
+    @Query() query: DashboardLevelQueryDto,
+  ) {
+    return this.importedLevelService.level(auth, query);
   }
 
   @Get('inventory')
