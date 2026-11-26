@@ -11,6 +11,13 @@ export class OpenAlertRefDto {
   @ApiProperty({ example: 3 })
   id: number;
 
+  @ApiProperty({
+    enum: ['OPEN', 'ATTENDED'],
+    enumName: 'AlertStatus',
+    description: 'Pending, or attended and still in force',
+  })
+  status: 'OPEN' | 'ATTENDED';
+
   @ApiProperty({ example: 2, description: '1 = lowest, 3 = nothing available' })
   severity: number;
 
@@ -45,11 +52,32 @@ export class ReplenishmentDto {
   })
   available: number;
 
-  @ApiProperty({ example: 10 })
+  @ApiProperty({
+    enum: ['MIN_MAX', 'FIXED_ROP', 'FORECAST_ROP'],
+    enumName: 'ReplenishmentMethod',
+    description:
+      '`FIXED_ROP`: the manual values are in force. `FORECAST_ROP`: computed from ' +
+      'the forecast, falling back to the manual values',
+  })
+  replenishmentMethod: 'MIN_MAX' | 'FIXED_ROP' | 'FORECAST_ROP';
+
+  @ApiProperty({ example: 7 })
+  leadTimeDays: number;
+
+  @ApiProperty({ example: 10, description: 'In force' })
   safetyStock: number;
 
-  @ApiProperty({ example: 30, description: '`0` = no reorder point' })
+  @ApiProperty({
+    example: 30,
+    description: 'In force; `0` = no reorder point',
+  })
   reorderPoint: number;
+
+  @ApiProperty({ example: 8, description: 'Set by hand' })
+  manualSafetyStock: number;
+
+  @ApiProperty({ example: 25, description: 'Set by hand' })
+  manualReorderPoint: number;
 
   @ApiProperty({ example: 20, type: Number, nullable: true })
   minStock: number | null;
@@ -60,9 +88,34 @@ export class ReplenishmentDto {
   @ApiProperty({
     ...valueSource,
     description:
-      'Whether the values were set by hand or computed by the forecast',
+      'Whether the values in force were set by hand or computed from the forecast',
   })
   valueSource: 'MANUAL' | 'CALCULATED';
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 12,
+    description: 'Forecast the calculated values come from',
+  })
+  baseForecastId: number | null;
+
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description: 'Last time the values were computed from the forecast',
+  })
+  calculatedAt: Date | null;
+
+  @ApiProperty({
+    enum: ['NO_FORECAST', 'NO_INTERVAL', 'NO_LEAD_TIME'],
+    enumName: 'CalculationIssue',
+    nullable: true,
+    description:
+      'Why `FORECAST_ROP` fell back to the manual values: no current OK forecast, ' +
+      'a forecast without a horizon interval, or no lead time',
+  })
+  calculationIssue: 'NO_FORECAST' | 'NO_INTERVAL' | 'NO_LEAD_TIME' | null;
 
   @ApiProperty({
     type: OpenAlertRefDto,
@@ -70,6 +123,14 @@ export class ReplenishmentDto {
     description: 'The open below-reorder-point alert, if any',
   })
   openAlert: OpenAlertRefDto | null;
+}
+
+export class AlertAttendantDto {
+  @ApiProperty({ example: 4, description: 'Tenant user id' })
+  id: number;
+
+  @ApiProperty({ example: 'Ana Gómez' })
+  name: string;
 }
 
 export class AlertDto {
@@ -91,10 +152,13 @@ export class AlertDto {
   severity: number;
 
   @ApiProperty({
-    enum: ['OPEN', 'RESOLVED', 'DISMISSED'],
+    enum: ['OPEN', 'ATTENDED', 'RESOLVED', 'DISMISSED'],
     enumName: 'AlertStatus',
+    description:
+      '`OPEN` pending; `ATTENDED` someone took charge, still in force until ' +
+      'resolved; `RESOLVED` closed by the evaluation',
   })
-  status: 'OPEN' | 'RESOLVED' | 'DISMISSED';
+  status: 'OPEN' | 'ATTENDED' | 'RESOLVED' | 'DISMISSED';
 
   @ApiProperty({ type: MovementProductDto })
   product: MovementProductDto;
@@ -173,6 +237,21 @@ export class AlertDto {
     | 'NO_REORDER_POINT'
     | 'INACTIVE'
     | null;
+
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description:
+      'When it was marked attended; null while pending. Kept once resolved',
+  })
+  attendedAt: Date | null;
+
+  @ApiProperty({
+    type: AlertAttendantDto,
+    nullable: true,
+    description: 'Who marked it attended',
+  })
+  attendedBy: AlertAttendantDto | null;
 }
 
 export class AlertPageDto {

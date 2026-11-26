@@ -49,6 +49,12 @@ export const warehouseErrors = {
       'WAREHOUSE_HAS_STOCK',
       'A warehouse with stock on hand cannot be deactivated',
     ),
+  hasTransfersInTransit: () =>
+    apiError(
+      HttpStatus.CONFLICT,
+      'WAREHOUSE_HAS_TRANSFERS_IN_TRANSIT',
+      'A warehouse with transfers in transit, to or from it, cannot be deactivated',
+    ),
 };
 
 type Tx = Prisma.TransactionClient;
@@ -60,6 +66,29 @@ const warehouseInclude = {
 type WarehouseWithLocation = Prisma.WarehouseGetPayload<{
   include: typeof warehouseInclude;
 }>;
+
+/**
+ * Creates a warehouse and its default location (RN-002) inside the caller's
+ * transaction. `POST /warehouses` and the inventory import both use it, so a
+ * warehouse is always born the same way.
+ */
+export async function createWarehouseWithDefaultLocation(
+  tx: Tx,
+  data: Pick<
+    Prisma.WarehouseUncheckedCreateInput,
+    'code' | 'name' | 'type' | 'address' | 'holdsStock'
+  >,
+): Promise<WarehouseWithLocation> {
+  const created = await tx.warehouse.create({ data });
+  const location = await tx.location.create({
+    data: { warehouseId: created.id, code: DEFAULT_LOCATION_CODE },
+  });
+  return tx.warehouse.update({
+    where: { id: created.id },
+    data: { defaultLocationId: location.id },
+    include: warehouseInclude,
+  });
+}
 
 function toDto(warehouse: WarehouseWithLocation): WarehouseDto {
   return {
@@ -133,25 +162,15 @@ export class WarehousesService {
     await this.assertUnique(tenant, dto.code, dto.name);
 
     try {
-      const warehouse = await tenant.$transaction(async (tx) => {
-        const created = await tx.warehouse.create({
-          data: {
-            code: dto.code,
-            name: dto.name,
-            type: dto.type,
-            address: dto.address || null,
-            holdsStock: dto.holdsStock ?? true,
-          },
-        });
-        const location = await tx.location.create({
-          data: { warehouseId: created.id, code: DEFAULT_LOCATION_CODE },
-        });
-        return tx.warehouse.update({
-          where: { id: created.id },
-          data: { defaultLocationId: location.id },
-          include: warehouseInclude,
-        });
-      });
+      const warehouse = await tenant.$transaction((tx) =>
+        createWarehouseWithDefaultLocation(tx, {
+          code: dto.code,
+          name: dto.name,
+          type: dto.type,
+          address: dto.address || null,
+          holdsStock: dto.holdsStock ?? true,
+        }),
+      );
       return toDto(warehouse);
     } catch (error) {
       if (isUniqueViolation(error)) throw warehouseErrors.codeTaken();
@@ -183,6 +202,9 @@ export class WarehousesService {
     if (dto.isActive !== undefined && dto.isActive !== warehouse.isActive) {
       if (!dto.isActive && (await this.hasStock(tenant, id))) {
         throw warehouseErrors.hasStock();
+      }
+      if (!dto.isActive && (await this.hasTransfersInTransit(tenant, id))) {
+        throw warehouseErrors.hasTransfersInTransit();
       }
       data.isActive = dto.isActive;
     }
@@ -256,5 +278,24 @@ export class WarehousesService {
       select: { id: true },
     });
     return balance !== null;
+  }
+
+  /** Transfers leaving or reaching the warehouse that are not received yet. */
+  private async hasTransfersInTransit(tenant: Tx, warehouseId: number) {
+    const transfer = await tenant.movement.findFirst({
+      where: {
+        status: 'IN_TRANSIT',
+        lines: {
+          some: {
+            OR: [
+              { originLocation: { warehouseId } },
+              { destinationLocation: { warehouseId } },
+            ],
+          },
+        },
+      },
+      select: { id: true },
+    });
+    return transfer !== null;
   }
 }

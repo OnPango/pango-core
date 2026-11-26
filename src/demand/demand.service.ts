@@ -8,6 +8,10 @@ import { Prisma } from '../generated/prisma/tenant/client.js';
 import { TenantPrismaService } from '../prisma/tenant-prisma.service.js';
 import { assertTenantSchema } from '../prisma/tenant-schema.js';
 import { demandErrors } from './demand-errors.js';
+import {
+  beforeCutover,
+  pangoStartSql,
+} from '../movement-imports/history-sql.js';
 import { demandCondition } from './demand-rule.js';
 import { type DemandQueryDto, GranularityValue } from './dto.js';
 import type { DemandSeriesDto } from './responses.js';
@@ -76,9 +80,9 @@ export function periodStarts(
 }
 
 // CU-10 A1 / US-37 (RF-PRED-001): demand history of a product, per period. Demand
-// is the CONFIRMED outbound movements whose type counts as demand (sales and
-// internal consumption); movements of the stock request type count only when they
-// fulfil a request (RN-008). Periods without demand are 0, never a gap.
+// is the CONFIRMED outbound movements whose type counts as demand: sales and
+// internal consumption, with or without a stock request (US-013). Periods without
+// demand are 0, never a gap.
 @Injectable()
 export class DemandService {
   constructor(private readonly tenants: TenantPrismaService) {}
@@ -153,27 +157,40 @@ export class DemandService {
     };
     if (warehouseIds?.length === 0) return empty;
 
-    // Demand lines of the product, as local dates of the organization.
-    const demand = `
-      FROM "${schema}"."movement_lines" l
-      JOIN "${schema}"."movements" m ON m."id" = l."movement_id"
-      JOIN "${schema}"."movement_types" t ON t."id" = m."movement_type_id"
-      JOIN "${schema}"."locations" loc ON loc."id" = l."origin_location_id"
-     WHERE l."product_id" = $1
-       AND ${demandCondition('$2')}
-       AND ($3::int[] IS NULL OR loc."warehouse_id" = ANY($3::int[]))`;
-    const params = [
-      productId,
-      settings?.stockRequestMovementTypeId ?? null,
-      warehouseIds,
-      timeZone,
-    ];
+    // Demand of the product per local day of the organization: Pango's demand
+    // lines, plus imported history (CU-17) before the product's first Pango
+    // movement in each warehouse.
+    const daily = `
+      WITH native AS (
+        SELECT (m."occurred_at" AT TIME ZONE $3)::date AS "day", l."quantity"
+          FROM "${schema}"."movement_lines" l
+          JOIN "${schema}"."movements" m ON m."id" = l."movement_id"
+          JOIN "${schema}"."movement_types" t ON t."id" = m."movement_type_id"
+          JOIN "${schema}"."locations" loc ON loc."id" = l."origin_location_id"
+         WHERE l."product_id" = $1
+           AND ${demandCondition()}
+           AND ($2::int[] IS NULL OR loc."warehouse_id" = ANY($2::int[]))
+      ), history AS (
+        SELECT h."business_date" AS "day", h."demand_quantity" AS "quantity"
+          FROM "${schema}"."historical_movements" h
+          LEFT JOIN (${pangoStartSql(schema, '$3', 'l."product_id" = $1')}) s
+            ON s."product_id" = h."product_id" AND s."warehouse_id" = h."warehouse_id"
+         WHERE h."product_id" = $1
+           AND h."demand_quantity" > 0
+           AND ($2::int[] IS NULL OR h."warehouse_id" = ANY($2::int[]))
+           AND ${beforeCutover}
+      ), daily AS (
+        SELECT "day", "quantity" FROM native
+        UNION ALL
+        SELECT "day", "quantity" FROM history
+      )`;
+    const params = [productId, warehouseIds, timeZone];
 
     const [{ first }] = await tenant.$queryRawUnsafe<
       { first: string | null }[]
     >(
-      `SELECT to_char(MIN((m."occurred_at" AT TIME ZONE $4)::date), 'YYYY-MM-DD') AS "first"
-       ${demand}`,
+      `${daily}
+       SELECT to_char(MIN("day"), 'YYYY-MM-DD') AS "first" FROM daily`,
       ...params,
     );
     if (first === null) return empty;
@@ -191,12 +208,12 @@ export class DemandService {
     const rows = await tenant.$queryRawUnsafe<
       { period: string; quantity: string }[]
     >(
-      `SELECT to_char(date_trunc($5, m."occurred_at" AT TIME ZONE $4), 'YYYY-MM-DD') AS "period",
-              SUM(l."quantity")::text AS "quantity"
-       ${demand}
-         AND (m."occurred_at" AT TIME ZONE $4)::date >= $6::date
-         AND (m."occurred_at" AT TIME ZONE $4)::date < $7::date
-       GROUP BY 1`,
+      `${daily}
+       SELECT to_char(date_trunc($4, "day"::timestamp), 'YYYY-MM-DD') AS "period",
+              SUM("quantity")::text AS "quantity"
+         FROM daily
+        WHERE "day" >= $5::date AND "day" < $6::date
+        GROUP BY 1`,
       ...params,
       granularity === GranularityValue.MONTHLY ? 'month' : 'week',
       starts[0],

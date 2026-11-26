@@ -30,6 +30,7 @@ function openAlertRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 7,
     productWarehouseId: 9,
+    status: 'OPEN',
     severity: 1,
     suggestedQuantity: D(42),
     availableQuantity: D(8),
@@ -102,6 +103,8 @@ describe('alert helpers', () => {
     expect(suggestedQuantity(D(8), D(10), D(50)).toNumber()).toBe(42);
     expect(suggestedQuantity(D(-2), D(10), null).toNumber()).toBe(12);
     expect(suggestedQuantity(D(10), D(10), null).toNumber()).toBe(0);
+    // A calculated reorder point above the max stock: order up to the point.
+    expect(suggestedQuantity(D(20), D(35), D(30)).toNumber()).toBe(15);
   });
 
   it('subtracts active reservations of the same warehouse', async () => {
@@ -195,6 +198,30 @@ describe('evaluateAlerts', () => {
     });
   });
 
+  it('puts an attended alert back to pending when it gets worse', async () => {
+    const worse = setup({ onHand: 0, openAlert: { status: 'ATTENDED' } });
+    await evaluateAlerts(worse as unknown as Tx, [9], now);
+    expect(worse.alert.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: expect.objectContaining({
+        severity: 3,
+        status: 'OPEN',
+        attendedAt: null,
+        attendedById: null,
+      }),
+    });
+
+    // Better, or only its numbers changed: whoever took charge keeps it.
+    const better = setup({
+      onHand: 7,
+      openAlert: { status: 'ATTENDED', severity: 2, availableQuantity: D(4) },
+    });
+    await evaluateAlerts(better as unknown as Tx, [9], now);
+    expect(better.alert.update.mock.calls[0][0].data).not.toHaveProperty(
+      'status',
+    );
+  });
+
   it('follows a changed reorder point while the alert stays open', async () => {
     const tx = setup({
       onHand: 8,
@@ -226,7 +253,7 @@ describe('evaluateAlerts', () => {
     await evaluateAlerts(tx as unknown as Tx, [9], now);
     expect(tx.alert.update).not.toHaveBeenCalled();
     expect(tx.alert.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [7] }, status: 'OPEN' },
+      where: { id: { in: [7] }, status: { in: ['OPEN', 'ATTENDED'] } },
       data: {
         status: 'RESOLVED',
         resolution: 'STOCK_RECOVERED',

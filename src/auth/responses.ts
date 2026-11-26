@@ -152,6 +152,20 @@ export class LoginCodeRequiredResponseDto implements LoginChallengeState {
     description: 'False if the email failed; POST /auth/login/resend retries',
   })
   emailSent: boolean;
+
+  @ApiProperty({
+    example: 12,
+    description:
+      'After the code, this browser is not asked again for this many hours (0: every time)',
+  })
+  trustedDeviceHours: number;
+
+  @ApiProperty({
+    example: 30,
+    description:
+      'Days without the code when the user asks to be remembered (`rememberDevice`)',
+  })
+  rememberDeviceDays: number;
 }
 
 export class VerifyEmailResponseDto {

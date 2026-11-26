@@ -1,5 +1,6 @@
 import {
   type AlertResolution,
+  type AlertStatus,
   Prisma,
 } from '../generated/prisma/tenant/client.js';
 
@@ -34,13 +35,18 @@ export function alertSeverity(
   return 1;
 }
 
-/** Quantity that brings available stock up to the max stock, or else to the reorder point. */
+/**
+ * Quantity that brings available stock up to the max stock, or else to the
+ * reorder point. A calculated reorder point may exceed the max stock; then the
+ * target is the reorder point.
+ */
 export function suggestedQuantity(
   available: Decimal,
   reorderPoint: Decimal,
   maxStock: Decimal | null,
 ): Decimal {
-  return Decimal.max((maxStock ?? reorderPoint).sub(available), 0);
+  const target = Decimal.max(maxStock ?? reorderPoint, reorderPoint);
+  return Decimal.max(target.sub(available), 0);
 }
 
 /** Stock levels per product-warehouse; product-warehouses without stock get zeros. */
@@ -97,6 +103,16 @@ export async function stockLevels(
   return levels;
 }
 
+/** Alerts still in force: pending, or attended but not resolved yet (US-045). */
+export const IN_FORCE: AlertStatus[] = ['OPEN', 'ATTENDED'];
+
+/** What marking an alert pending again clears. */
+export const BACK_TO_PENDING = {
+  status: 'OPEN',
+  attendedAt: null,
+  attendedById: null,
+} as const;
+
 /**
  * CU-12a: compares available stock with the reorder point of each
  * product-warehouse. Opens a `BELOW_ROP` alert when available ≤ reorder point and
@@ -141,11 +157,12 @@ export async function evaluateAlerts(
     where: {
       productWarehouseId: { in: productWarehouseIds },
       type: 'BELOW_ROP',
-      status: 'OPEN',
+      status: { in: IN_FORCE },
     },
     select: {
       id: true,
       productWarehouseId: true,
+      status: true,
       severity: true,
       suggestedQuantity: true,
       availableQuantity: true,
@@ -191,11 +208,18 @@ export async function evaluateAlerts(
           },
         });
       } else if (!sameValues(current, values)) {
-        // Still below with an alert open: never a second one (RF-ALT-001), but
-        // keep what it shows current. `createdAt` stays when it was raised.
+        // Still below with an alert in force: never a second one (RF-ALT-001),
+        // but keep what it shows current. `createdAt` stays when it was raised.
+        // An attended alert that gets worse needs someone to look again.
+        const worse =
+          current.status === 'ATTENDED' && values.severity > current.severity;
         await tx.alert.update({
           where: { id: current.id },
-          data: { ...values, updatedAt: now },
+          data: {
+            ...values,
+            ...(worse && BACK_TO_PENDING),
+            updatedAt: now,
+          },
         });
       }
     } else if (current !== undefined) {
@@ -205,7 +229,7 @@ export async function evaluateAlerts(
   }
   for (const [resolution, ids] of toResolve) {
     await tx.alert.updateMany({
-      where: { id: { in: ids }, status: 'OPEN' },
+      where: { id: { in: ids }, status: { in: IN_FORCE } },
       data: { status: 'RESOLVED', resolution, resolvedAt: now, updatedAt: now },
     });
   }
@@ -254,14 +278,15 @@ function sameValues(stored: AlertValues, next: AlertValues): boolean {
 
 /**
  * For changes that switch alerts on or off for many product-warehouses at once
- * (archiving a product, closing a warehouse): locks the rows of their products,
+ * (archiving a product, closing a warehouse, a forecast run): locks the rows of their products,
  * in id order like movements do, and returns the product-warehouse ids to pass
  * to `evaluateAlerts` once the change is written in the same transaction.
  */
 export async function lockAlertScope(
   tx: Tx,
   schema: string,
-  where: { productId: number } | { warehouseId: number },
+  where:
+    { productId: number } | { warehouseId: number } | { id: { in: number[] } },
 ): Promise<number[]> {
   const productWarehouses = await tx.productWarehouse.findMany({
     where,

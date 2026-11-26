@@ -10,6 +10,7 @@ import { AuthService } from './auth.service.js';
 import type { SignupDto } from './dto.js';
 import { hashPassword, hashToken } from './secrets.js';
 import type { TokenService } from './token.service.js';
+import type { TrustedDeviceService } from './trusted-device.service.js';
 
 const context: AuthContext = {
   account: { id: 1, email: 'ana@demo.co', name: 'Ana' },
@@ -45,7 +46,12 @@ async function errorCode(promise: Promise<unknown>): Promise<string> {
 
 function setup({ loginCode = true } = {}) {
   const control = {
-    account: { findUnique: vi.fn() },
+    account: {
+      findUnique: vi.fn(),
+      findUniqueOrThrow: vi
+        .fn()
+        .mockResolvedValue({ id: 1, passwordHash: 'hash' }),
+    },
     organization: { findUnique: vi.fn() },
     refreshToken: {
       create: vi.fn(),
@@ -72,6 +78,14 @@ function setup({ loginCode = true } = {}) {
     verify: vi.fn().mockResolvedValue({ accountId: 1, organizationId: 10 }),
     resend: vi.fn(),
   };
+  const trustedDevices = {
+    isTrusted: vi.fn().mockReturnValue(false),
+    issue: vi.fn().mockReturnValue({
+      token: 'trust',
+      maxAgeMs: 1000,
+      expiresAt: new Date(),
+    }),
+  };
   const service = new AuthService(
     control as unknown as ControlPrismaService,
     access as unknown as AccessService,
@@ -79,8 +93,17 @@ function setup({ loginCode = true } = {}) {
     provisioning as unknown as ProvisioningService,
     verification as unknown as EmailVerificationService,
     loginCodes as unknown as LoginCodeService,
+    trustedDevices as unknown as TrustedDeviceService,
   );
-  return { control, access, provisioning, verification, loginCodes, service };
+  return {
+    control,
+    access,
+    provisioning,
+    verification,
+    loginCodes,
+    trustedDevices,
+    service,
+  };
 }
 
 describe('AuthService.login', () => {
@@ -167,6 +190,49 @@ describe('AuthService.login', () => {
     expect(loginCodes.start).not.toHaveBeenCalled();
   });
 
+  it('opens the session without a code on a trusted browser', async () => {
+    const { service, control, access, loginCodes, trustedDevices } = setup();
+    const account = {
+      id: 1,
+      passwordHash: await hashPassword('right-password'),
+      emailVerifiedAt: new Date(),
+    };
+    control.account.findUnique.mockResolvedValue(account);
+    trustedDevices.isTrusted.mockReturnValue(true);
+    const session = await service.login(
+      'demo',
+      { email: 'ana@demo.co', password: 'right-password' },
+      'device-token',
+    );
+    expect(trustedDevices.isTrusted).toHaveBeenCalledWith(
+      'device-token',
+      account,
+      10,
+    );
+    expect(loginCodes.start).not.toHaveBeenCalled();
+    expect(access.loadContext).toHaveBeenCalledWith(1, 10);
+    expect('accessToken' in session).toBe(true);
+  });
+
+  it('still asks for the password on a trusted browser', async () => {
+    const { service, control, trustedDevices } = setup();
+    control.account.findUnique.mockResolvedValue({
+      id: 1,
+      passwordHash: await hashPassword('right-password'),
+      emailVerifiedAt: new Date(),
+    });
+    trustedDevices.isTrusted.mockReturnValue(true);
+    expect(
+      await errorCode(
+        service.login(
+          'demo',
+          { email: 'ana@demo.co', password: 'wrong' },
+          'device-token',
+        ),
+      ),
+    ).toBe('INVALID_CREDENTIALS');
+  });
+
   it('opens the session at once with the code disabled', async () => {
     const { service, control, access } = setup({ loginCode: false });
     control.account.findUnique.mockResolvedValue({
@@ -196,13 +262,20 @@ describe('AuthService.verifyLoginCode', () => {
     ).toBe('LOGIN_CHALLENGE_INVALID');
   });
 
-  it('opens the session of the verified challenge', async () => {
-    const { service, loginCodes, access } = setup();
-    const session = await service.verifyLoginCode(
+  it('opens the session of the verified challenge and trusts the browser', async () => {
+    const { service, loginCodes, access, trustedDevices } = setup();
+    const { session, trust } = await service.verifyLoginCode(
       'demo',
       'challenge',
       '123456',
+      true,
     );
+    expect(trustedDevices.issue).toHaveBeenCalledWith(
+      { id: 1, passwordHash: 'hash' },
+      10,
+      true,
+    );
+    expect(trust?.token).toBe('trust');
     expect(loginCodes.verify).toHaveBeenCalledWith(
       'demo',
       'challenge',

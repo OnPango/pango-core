@@ -3,6 +3,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { MailMessage, MailService } from '../mail/mail.service.js';
 import type { ControlPrismaService } from '../prisma/control-prisma.service.js';
 import { LoginCodeService, maskEmail } from './login-code.service.js';
+import type { TrustedDeviceService } from './trusted-device.service.js';
 
 // Predictable codes, so a resent code always differs from the previous one.
 let nextCode = 100_000;
@@ -128,6 +129,9 @@ function setup({ failEmail = false } = {}) {
     config as unknown as ConfigService,
     control as unknown as ControlPrismaService,
     mail as unknown as MailService,
+    {
+      durations: { trustedDeviceHours: 12, rememberDeviceDays: 30 },
+    } as unknown as TrustedDeviceService,
   );
   const lastCode = () =>
     /(\d{6}) is your Pango login code/.exec(sent.at(-1)!.subject)![1];

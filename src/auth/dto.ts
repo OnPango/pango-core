@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsNotEmpty,
@@ -56,6 +57,17 @@ export class VerifyLoginCodeDto {
   @Transform(trim)
   @Matches(/^\d{6}$/, { message: 'code must be six digits' })
   code: string;
+
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      'Do not ask for the code on this browser for `LOGIN_REMEMBER_DEVICE_DAYS` (default 30). ' +
+      'Without it, the browser is trusted for `LOGIN_TRUSTED_DEVICE_HOURS` (default 12)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  rememberDevice?: boolean;
 }
 
 export class SignupOrganizationDto {

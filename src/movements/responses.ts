@@ -104,15 +104,27 @@ export class MovementLineDto {
   @ApiProperty({
     type: LocationRefDto,
     nullable: true,
-    description: 'Where the stock arrived; null when stock was removed',
+    description:
+      'Where the stock arrived (on a transfer in transit, where it will arrive); null ' +
+      'when stock was removed',
   })
   destinationLocation: LocationRefDto | null;
 
   @ApiProperty({ type: LotRefDto, nullable: true })
   lot: LotRefDto | null;
 
-  @ApiProperty({ example: 12 })
+  @ApiProperty({ example: 12, description: 'On transfers, the quantity sent' })
   quantity: number;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 12,
+    description:
+      'Transfers: what arrived at the destination (the rest was lost in transit); null ' +
+      'while in transit and on other movements',
+  })
+  receivedQuantity: number | null;
 
   @ApiProperty({ example: 1500 })
   unitCost: number;
@@ -141,11 +153,32 @@ export class MovementDto {
   @ApiProperty({ type: MovementTypeRefDto })
   movementType: MovementTypeRefDto;
 
-  @ApiProperty({ type: WarehouseRefDto })
+  @ApiProperty({
+    type: WarehouseRefDto,
+    description: 'Where it was registered; on transfers, the origin',
+  })
   warehouse: WarehouseRefDto;
+
+  @ApiProperty({
+    type: WarehouseRefDto,
+    nullable: true,
+    description: 'Transfers: the warehouse the stock goes to; null otherwise',
+  })
+  destinationWarehouse: WarehouseRefDto | null;
 
   @ApiProperty({ type: MovementUserDto })
   registeredBy: MovementUserDto;
+
+  @ApiProperty({
+    type: MovementUserDto,
+    nullable: true,
+    description:
+      'Transfers: who received it; null while in transit and on other movements',
+  })
+  receivedBy: MovementUserDto | null;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  receivedAt: Date | null;
 
   @ApiProperty({ type: DepartmentRefDto, nullable: true })
   department: DepartmentRefDto | null;

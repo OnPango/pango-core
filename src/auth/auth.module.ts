@@ -9,6 +9,7 @@ import { EmailVerificationService } from './email-verification.service.js';
 import { LoginCodeService } from './login-code.service.js';
 import { SessionCookies } from './session-cookies.js';
 import { TokenService } from './token.service.js';
+import { TrustedDeviceService } from './trusted-device.service.js';
 
 @Module({
   controllers: [AuthController],
@@ -19,6 +20,7 @@ import { TokenService } from './token.service.js';
     LoginCodeService,
     SessionCookies,
     TokenService,
+    TrustedDeviceService,
     // Global guards run in this order: CSRF check before authentication.
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: AuthGuard },

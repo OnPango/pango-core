@@ -73,6 +73,7 @@ function setup() {
     },
     location: { create: vi.fn().mockResolvedValue({ id: 7 }) },
     stockBalance: { findFirst: vi.fn().mockResolvedValue(null) },
+    movement: { findFirst: vi.fn().mockResolvedValue(null) },
     productWarehouse: { findMany: vi.fn().mockResolvedValue([]) },
     $queryRawUnsafe: vi.fn(),
     $transaction: vi.fn(),
@@ -202,6 +203,14 @@ describe('WarehousesService.update', () => {
     expect(
       await errorCode(service.update(manager, 1, { isActive: false })),
     ).toBe('WAREHOUSE_HAS_STOCK');
+  });
+
+  it('does not deactivate a warehouse with transfers in transit', async () => {
+    const { tenant, service } = setup();
+    tenant.movement.findFirst.mockResolvedValue({ id: 8 });
+    expect(
+      await errorCode(service.update(manager, 1, { isActive: false })),
+    ).toBe('WAREHOUSE_HAS_TRANSFERS_IN_TRANSIT');
   });
 
   it('closing evaluates the alerts of its products there, with their rows locked', async () => {
